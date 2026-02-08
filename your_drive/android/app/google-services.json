@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "821016367983",
+    "project_id": "your-drive-3129e",
+    "storage_bucket": "your-drive-3129e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:821016367983:android:2080070a5a91a10a354e9a",
+        "android_client_info": {
+          "package_name": "com.example.your_drive"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHVjK2JMjWOegl6Ew2Lj2plIrRuG_GHxQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

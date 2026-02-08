@@ -92,6 +92,9 @@ class _SignupPageState extends State<SignupPage> {
         serverClientId: webClientId,
       );
 
+      // 🛑 FIX: Force account picker by signing out first
+      await googleSignIn.signOut();
+
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
 
       // user cancelled

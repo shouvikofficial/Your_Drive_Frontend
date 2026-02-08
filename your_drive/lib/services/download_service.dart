@@ -1,35 +1,78 @@
 import 'dart:io';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import '../config/env.dart';
 
 class DownloadService {
-  static Future<void> downloadFile(String fileId, String fileName) async {
-    // 1️⃣ Ask backend for REAL Telegram URL
-    final res = await http.get(
-      Uri.parse("${Env.backendBaseUrl}/download/$fileId"),
-    );
+  static final Dio _dio = Dio();
 
-    if (res.statusCode != 200) {
-      throw Exception("Failed to get download URL");
+  /// 📥 DOWNLOAD FILE
+  /// Returns the String path where the file was saved.
+  static Future<String> downloadFile(String messageId, String fileName) async {
+    try {
+      // 1. Get the Correct Download Directory
+      final Directory? dir = await _getDownloadDirectory();
+      if (dir == null) throw Exception("Could not resolve save directory");
+
+      // 2. Handle Duplicate Filenames (e.g. image.png -> image_1.png)
+      String savePath = "${dir.path}${Platform.pathSeparator}$fileName";
+      savePath = _getUniquePath(savePath);
+
+      // 3. Download
+      final String downloadUrl = "${Env.backendBaseUrl}/api/file/$messageId";
+
+      await _dio.download(
+        downloadUrl,
+        savePath,
+        onReceiveProgress: (received, total) {
+          if (total != -1) {
+            // Optional: Print progress
+          }
+        },
+      );
+
+      print("✅ File saved to: $savePath");
+      return savePath; // 👈 RETURN THE PATH
+
+    } catch (e) {
+      print("❌ Download Failed: $e");
+      throw Exception("Download failed: $e");
     }
+  }
 
-    final decoded = jsonDecode(res.body);
-    final String url = decoded['url'];
-
-    // 2️⃣ Download file bytes
-    final fileRes = await http.get(Uri.parse(url));
-
-    if (fileRes.statusCode != 200) {
-      throw Exception("Failed to download file");
+  /// 📂 CROSS-PLATFORM DIRECTORY LOGIC
+  static Future<Directory?> _getDownloadDirectory() async {
+    if (Platform.isAndroid) {
+      // Use the standard Download directory
+      return Directory('/storage/emulated/0/Download');
     }
+    
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      return await getDownloadsDirectory();
+    }
+    
+    return await getApplicationDocumentsDirectory(); // iOS
+  }
 
-    // 3️⃣ Save to Downloads folder (Windows / Desktop safe)
-    final dir = await getDownloadsDirectory();
-    if (dir == null) throw Exception("Downloads directory not found");
+  /// 🔄 DUPLICATE FILE HANDLER (Fixed Syntax)
+  static String _getUniquePath(String filePath) {
+    File file = File(filePath);
+    if (!file.existsSync()) return filePath; // If doesn't exist, return original
 
-    final file = File("${dir.path}/$fileName");
-    await file.writeAsBytes(fileRes.bodyBytes);
+    int count = 1;
+    String newPath = filePath;
+    
+    final String dir = file.parent.path;
+    final String name = file.uri.pathSegments.last;
+    final String ext = name.contains('.') ? ".${name.split('.').last}" : "";
+    final String rawName = name.contains('.') ? name.substring(0, name.lastIndexOf('.')) : name;
+
+    while (file.existsSync()) {
+      // ✅ Fixed string interpolation here
+      newPath = "$dir${Platform.pathSeparator}${rawName}_$count$ext";
+      file = File(newPath);
+      count++;
+    }
+    return newPath;
   }
 }

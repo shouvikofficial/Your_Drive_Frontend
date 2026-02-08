@@ -1,5 +1,5 @@
 name: your_drive
-description: Drive-like Flutter app
+description: A high-performance Drive-like app powered by Telegram MTProto.
 
 publish_to: "none"
 
@@ -12,14 +12,16 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # 🔹 Networking (Telegram bot / backend)
+  # 🔹 Networking (Upgraded for 2GB uploads)
+  dio: ^5.4.0              # 🔥 REQUIRED for Chunked Uploads & Progress Tracking
   http: ^1.2.0
 
   # 🔹 File picker
   file_picker: ^10.3.10
 
-  # 🔹 File system (DOWNLOAD SUPPORT ✅ REQUIRED)
+  # 🔹 File system (DOWNLOAD SUPPORT ✅)
   path_provider: ^2.1.2
+  path: ^1.9.0             # ✅ Added for easier file path handling
 
   # 🔹 Media / UI helpers
   url_launcher: ^6.3.2
@@ -30,14 +32,32 @@ dependencies:
   # 🔹 Supabase (Auth + Database)
   supabase_flutter: ^2.12.0
 
-  photo_manager: ^3.0.0  # To access Gallery
-  permission_handler: ^12.0.1 # For permissions
-  shared_preferences: ^2.2.0 # To remember which files we already uploaded
-
-  connectivity_plus: ^7.0.0  # To check for Wi-Fi
-  battery_plus: ^7.0.0       # To check if charging
-  workmanager: ^0.9.0+3
+  # 🔹 Gallery & Permissions
+  device_info_plus: ^10.1.0
+  photo_manager: ^3.0.0 
+  permission_handler: ^12.0.1 
+  
+  # 🔹 Local State & Background Logic
+  shared_preferences: ^2.2.0 
+  connectivity_plus: ^7.0.0  # ✅ Used by BackupService to check for Wi-Fi
+  battery_plus: ^7.0.0       # ✅ Used by BackupService to check power
+  workmanager: ^0.9.0+3      # ✅ Essential for background auto-syncing
   google_sign_in: ^6.2.1
+  photo_view: ^0.15.0
+  local_auth: ^2.3.0
+  firebase_core: ^4.4.0
+  firebase_messaging: ^16.1.1
+  timeago: ^3.6.1
+  flutter_foreground_task: ^8.1.0
+  crypto: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true
+  # Add your assets here if you have custom icons or images
+  # assets:
+  #   - assets/

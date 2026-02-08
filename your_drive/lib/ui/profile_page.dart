@@ -2,11 +2,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/material.dart'; // 👈 Add this line!
 import '../theme/app_colors.dart';
 import '../auth/login_page.dart';
-import '../services/backup_service.dart';
-// ✅ IMPORT THE SETTINGS PAGES
-import 'settings_pages.dart'; 
+import 'settings_pages.dart'; // ✅ Import the file containing BackupSettingsPage
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -24,35 +23,62 @@ class _ProfilePageState extends State<ProfilePage> {
   int totalBytesUsed = 0;
   final int maxStorageBytes = 100 * 1024 * 1024 * 1024 * 1024; // 100 TB
 
-  // ⚙️ Backup Settings State
-  bool _backupEnabled = false;
-  bool _wifiOnly = true;
-  bool _chargingOnly = false;
+  // ⚙️ Backup Status (For Display Only)
+  bool _isBackupOn = false;
 
   @override
   void initState() {
     super.initState();
-    loadProfile();
-    _loadBackupSettings();
+    _loadCachedProfile(); // ⚡ 1. Load instantly from cache
+    loadProfile();        // 🌍 2. Fetch fresh data in background
+    _checkBackupStatus(); // ☁️ 3. Check status for "On/Off" text
   }
 
-  /// 📥 LOAD PROFILE
+  /// ⚡ LOAD CACHED DATA (Instant UI)
+  Future<void> _loadCachedProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        name = prefs.getString('user_name') ?? "User";
+        email = prefs.getString('user_email') ?? "";
+        // ✅ Load previously calculated storage size
+        totalBytesUsed = prefs.getInt('user_storage_used') ?? 0;
+        
+        // If we have cached data, stop the spinner immediately
+        if (name != "User") loading = false;
+      });
+    }
+  }
+
+  /// ☁️ CHECK BACKUP STATUS (Updates the On/Off text)
+  Future<void> _checkBackupStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _isBackupOn = prefs.getBool('backup_enabled') ?? false;
+      });
+    }
+  }
+
+  /// 📥 LOAD FRESH PROFILE (Background)
   Future<void> loadProfile() async {
     try {
       final supabase = Supabase.instance.client;
       final user = supabase.auth.currentUser;
 
       if (user == null) {
-        setState(() => loading = false);
+        if (mounted) setState(() => loading = false);
         return;
       }
 
+      // 1. Fetch Profile
       final profileData = await supabase
           .from('profiles')
           .select('name')
           .eq('id', user.id)
           .maybeSingle();
 
+      // 2. Fetch Files for Storage Calc
       final filesData = await supabase
           .from('files')
           .select('size')
@@ -65,135 +91,24 @@ class _ProfilePageState extends State<ProfilePage> {
 
       if (!mounted) return;
 
+      final newName = profileData?['name'] ?? 'User';
+      final newEmail = user.email ?? '';
+
+      // 💾 Save to Cache
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_name', newName);
+      await prefs.setString('user_email', newEmail);
+      await prefs.setInt('user_storage_used', sum);
+
       setState(() {
-        name = profileData?['name'] ?? 'User';
-        email = user.email ?? '';
+        name = newName;
+        email = newEmail;
         totalBytesUsed = sum;
         loading = false;
       });
     } catch (_) {
-      if (!mounted) return;
-      setState(() => loading = false);
+      if (mounted) setState(() => loading = false);
     }
-  }
-
-  /// 💾 LOAD SETTINGS
-  Future<void> _loadBackupSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _backupEnabled = prefs.getBool('backup_enabled') ?? false;
-      _wifiOnly = prefs.getBool('wifi_only') ?? true;
-      _chargingOnly = prefs.getBool('charging_only') ?? false;
-    });
-  }
-
-  /// 💾 SAVE SETTINGS
-  Future<void> _saveSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('backup_enabled', _backupEnabled);
-    await prefs.setBool('wifi_only', _wifiOnly);
-    await prefs.setBool('charging_only', _chargingOnly);
-  }
-
-  /// ⚙️ SHOW BACKUP SETTINGS PANEL
-  void _showBackupSettings() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.cloud_sync, color: AppColors.blue, size: 28),
-                      const SizedBox(width: 12),
-                      const Text(
-                        "Backup & Sync",
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    "Automatically upload photos and videos from this device.",
-                    style: TextStyle(color: Colors.grey, fontSize: 13),
-                  ),
-                  const SizedBox(height: 24),
-
-                  /// 1. MASTER TOGGLE
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text("Back up & sync", style: TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text(_backupEnabled ? "On" : "Off"),
-                    value: _backupEnabled,
-                    activeColor: AppColors.blue,
-                    onChanged: (val) {
-                      setSheetState(() => _backupEnabled = val);
-                      setState(() => _backupEnabled = val);
-                      _saveSettings();
-
-                      if (val) {
-                        // Start Backup
-                        BackupService().startAutoBackup();
-                        BackupService().scheduleBackgroundBackup();
-                      } else {
-                        // Stop Backup
-                        BackupService().stopBackup();
-                        BackupService().cancelBackgroundBackup();
-                      }
-                    },
-                  ),
-
-                  if (_backupEnabled) ...[
-                    const Divider(height: 30),
-                    
-                    const Text("Cellular Data Usage", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                    
-                    /// 2. WI-FI ONLY TOGGLE
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text("Back up over Wi-Fi only"),
-                      value: _wifiOnly,
-                      activeColor: AppColors.blue,
-                      onChanged: (val) {
-                        setSheetState(() => _wifiOnly = val);
-                        setState(() => _wifiOnly = val);
-                        _saveSettings();
-                      },
-                    ),
-
-                    const SizedBox(height: 10),
-                    const Text("Battery Settings", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-
-                    /// 3. CHARGING ONLY TOGGLE
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text("When charging only"),
-                      value: _chargingOnly,
-                      activeColor: AppColors.blue,
-                      onChanged: (val) {
-                        setSheetState(() => _chargingOnly = val);
-                        setState(() => _chargingOnly = val);
-                        _saveSettings();
-                      },
-                    ),
-                  ],
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
   }
 
   /// 🧮 HELPER: FORMAT BYTES
@@ -208,8 +123,16 @@ class _ProfilePageState extends State<ProfilePage> {
 
   /// 🚪 LOGOUT FUNCTION
   Future<void> logout() async {
+    // 1. Sign out from Supabase
     await Supabase.instance.client.auth.signOut();
+    
+    // 2. Clear local storage (Optional but recommended)
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear(); 
+
     if (!mounted) return;
+    
+    // 3. Navigate to Login
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginPage()), 
       (route) => false,
@@ -240,15 +163,10 @@ class _ProfilePageState extends State<ProfilePage> {
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
         ),
         centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: () {}, 
-            icon: const Icon(Icons.settings_outlined, color: Colors.black),
-          ),
-        ],
       ),
 
-      body: loading
+      // ✅ INSTANT LOAD: Only show spinner if we have NO cached data (first install)
+      body: loading && name == "User"
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
               padding: const EdgeInsets.all(24),
@@ -375,7 +293,6 @@ class _ProfilePageState extends State<ProfilePage> {
                     ),
                     child: Column(
                       children: [
-                        // ✅ LINKED: Account Settings
                         _buildProfileOption(
                           Icons.person_outline, 
                           "Account Settings", 
@@ -383,30 +300,33 @@ class _ProfilePageState extends State<ProfilePage> {
                         ),
                         _buildDivider(),
                         
-                        // ✅ LINKED: Backup & Sync (Opens Bottom Sheet)
+                        // ✅ LINKED TO BACKUP SETTINGS PAGE
                         _buildProfileOption(
                           Icons.cloud_sync_outlined, 
                           "Backup & Sync",
-                          onTap: _showBackupSettings, 
-                          trailingText: _backupEnabled ? "On" : "Off", 
+                          onTap: () async {
+                             // Navigate and wait for result
+                             await Navigator.push(context, MaterialPageRoute(builder: (_) => const BackupSettingsPage()));
+                             // Refresh status when user returns
+                             _checkBackupStatus(); 
+                          }, 
+                          trailingText: _isBackupOn ? "On" : "Off", 
+                          trailingColor: _isBackupOn ? AppColors.blue : Colors.grey,
                         ),
                         
                         _buildDivider(),
-                        // ✅ LINKED: Notifications
                         _buildProfileOption(
                           Icons.notifications_none, 
                           "Notifications", 
                           onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsPage()))
                         ),
                         _buildDivider(),
-                        // ✅ LINKED: Privacy
                         _buildProfileOption(
                           Icons.lock_outline, 
                           "Privacy & Security", 
                           onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PrivacyPage()))
                         ),
                         _buildDivider(),
-                        // ✅ LINKED: Help
                         _buildProfileOption(
                           Icons.help_outline, 
                           "Help & Support", 
@@ -447,7 +367,7 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   /// Helper widget for menu items
-  Widget _buildProfileOption(IconData icon, String title, {required VoidCallback onTap, String? trailingText}) {
+  Widget _buildProfileOption(IconData icon, String title, {required VoidCallback onTap, String? trailingText, Color? trailingColor}) {
     return ListTile(
       leading: Container(
         padding: const EdgeInsets.all(8),
@@ -465,8 +385,8 @@ class _ProfilePageState extends State<ProfilePage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (trailingText != null) 
-            Text(trailingText, style: TextStyle(color: Colors.grey[600], fontSize: 13, fontWeight: FontWeight.w500)),
-          if (trailingText != null) const SizedBox(width: 8),
+            Text(trailingText, style: TextStyle(color: trailingColor ?? Colors.grey[600], fontSize: 13, fontWeight: FontWeight.w500)),
+          const SizedBox(width: 8),
           const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
         ],
       ),

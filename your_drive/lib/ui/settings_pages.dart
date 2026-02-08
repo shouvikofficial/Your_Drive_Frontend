@@ -1,5 +1,161 @@
 import 'package:flutter/material.dart';
-import '../theme/app_colors.dart'; // Make sure this path matches your project structure
+import 'package:shared_preferences/shared_preferences.dart';
+import '../theme/app_colors.dart';
+import '../services/biometric_service.dart'; 
+import '../services/backup_service.dart'; // ✅ Import Backup Service
+
+/// ------------------------------------------------------
+/// ☁️ BACKUP & SYNC PAGE (With Instant Triggers)
+/// ------------------------------------------------------
+class BackupSettingsPage extends StatefulWidget {
+  const BackupSettingsPage({super.key});
+
+  @override
+  State<BackupSettingsPage> createState() => _BackupSettingsPageState();
+}
+
+class _BackupSettingsPageState extends State<BackupSettingsPage> {
+  bool _backupEnabled = false;
+  bool _wifiOnly = true;
+  bool _chargingOnly = false;
+  
+  // Instance to trigger logic instantly
+  final BackupService _backupService = BackupService();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _backupEnabled = prefs.getBool('backup_enabled') ?? false;
+        _wifiOnly = prefs.getBool('wifi_only') ?? true;
+        _chargingOnly = prefs.getBool('charging_only') ?? false;
+      });
+    }
+  }
+
+  /// ⚡ MAIN TOGGLE (Start/Stop)
+  Future<void> _toggleBackup(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('backup_enabled', value);
+    setState(() => _backupEnabled = value);
+
+    if (value) {
+      // 🚀 INSTANT START
+      _backupService.initBackgroundService();
+      _backupService.startAutoBackup();
+      _backupService.scheduleBackgroundBackup();
+    } else {
+      // 🛑 INSTANT STOP
+      _backupService.stopBackup();
+      _backupService.cancelBackgroundBackup();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F9FD),
+      appBar: AppBar(
+        title: const Text("Backup & Sync", style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: const BackButton(color: Colors.black),
+        titleTextStyle: const TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          // ☁️ MAIN CARD
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: AppColors.blue.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppColors.blue.withOpacity(0.2)),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.cloud_upload_rounded, size: 48, color: AppColors.blue),
+                const SizedBox(height: 12),
+                const Text("Automatic Backup", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                const Text("Keep your photos & videos safe", style: TextStyle(color: Colors.grey)),
+                const SizedBox(height: 16),
+                Switch(
+                  value: _backupEnabled,
+                  activeColor: AppColors.blue,
+                  onChanged: _toggleBackup,
+                ),
+              ],
+            ),
+          ),
+          
+          const SizedBox(height: 24),
+          const SectionHeader(title: "Preferences"),
+          
+          // 📶 WI-FI ONLY (Instant Trigger)
+          SettingsTile(
+            icon: Icons.wifi,
+            title: "Back up over Wi-Fi only",
+            subtitle: "Save mobile data usage",
+            trailing: Switch(
+              value: _wifiOnly,
+              activeColor: AppColors.blue,
+              onChanged: _backupEnabled ? (val) async {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('wifi_only', val);
+                setState(() => _wifiOnly = val);
+                
+                // ⚡ FIRE INSTANTLY: Re-runs logic to Pause/Resume based on new setting
+                _backupService.startAutoBackup(); 
+              } : null,
+            ),
+          ),
+
+          // 🔋 CHARGING ONLY (Instant Trigger)
+          SettingsTile(
+            icon: Icons.battery_charging_full,
+            title: "Back up while charging only",
+            subtitle: "Save battery life",
+            trailing: Switch(
+              value: _chargingOnly,
+              activeColor: AppColors.blue,
+              onChanged: _backupEnabled ? (val) async {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('charging_only', val);
+                setState(() => _chargingOnly = val);
+                
+                // ⚡ FIRE INSTANTLY
+                _backupService.startAutoBackup();
+              } : null,
+            ),
+          ),
+
+          // 📊 LIVE STATUS INDICATOR
+          const SizedBox(height: 24),
+          ValueListenableBuilder<String>(
+            valueListenable: _backupService.statusNotifier,
+            builder: (context, status, _) {
+              return Center(
+                child: Text(
+                  "Status: $status",
+                  style: TextStyle(color: Colors.grey[600], fontSize: 13, fontStyle: FontStyle.italic),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// ------------------------------------------------------
 /// 🔒 PRIVACY & SECURITY PAGE
@@ -13,7 +169,48 @@ class PrivacyPage extends StatefulWidget {
 
 class _PrivacyPageState extends State<PrivacyPage> {
   bool _biometricEnabled = false;
-  bool _twoFactorEnabled = true;
+  bool _twoFactorEnabled = true; 
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _biometricEnabled = prefs.getBool('biometric_enabled') ?? false;
+      });
+    }
+  }
+
+  Future<void> _toggleBiometric(bool value) async {
+    if (value) {
+      bool authenticated = await BiometricService.authenticate();
+      if (authenticated) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('biometric_enabled', true);
+        setState(() => _biometricEnabled = true);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Biometric unlock enabled"), backgroundColor: Colors.green),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Authentication failed"), backgroundColor: Colors.red),
+          );
+        }
+      }
+    } else {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('biometric_enabled', false);
+      setState(() => _biometricEnabled = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,6 +221,8 @@ class _PrivacyPageState extends State<PrivacyPage> {
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: const BackButton(color: Colors.black),
+        titleTextStyle: const TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -32,11 +231,11 @@ class _PrivacyPageState extends State<PrivacyPage> {
           SettingsTile(
             icon: Icons.fingerprint,
             title: "Biometric Unlock",
-            subtitle: "Use FaceID / Fingerprint to open app",
+            subtitle: "Use Fingerprint to open app",
             trailing: Switch(
               value: _biometricEnabled,
               activeColor: AppColors.blue,
-              onChanged: (val) => setState(() => _biometricEnabled = val),
+              onChanged: _toggleBiometric,
             ),
           ),
           SettingsTile(
@@ -90,6 +289,8 @@ class HelpPage extends StatelessWidget {
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: const BackButton(color: Colors.black),
+        titleTextStyle: const TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -148,6 +349,8 @@ class AccountSettingsPage extends StatelessWidget {
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: const BackButton(color: Colors.black),
+        titleTextStyle: const TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -192,6 +395,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: const BackButton(color: Colors.black),
+        titleTextStyle: const TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -221,7 +426,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
 }
 
 /// ------------------------------------------------------
-/// 🛠️ HELPER WIDGETS (To make code cleaner)
+/// 🛠️ HELPER WIDGETS
 /// ------------------------------------------------------
 
 class SectionHeader extends StatelessWidget {

@@ -2,16 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:your_drive/ui/profile_page.dart';
 import '../theme/app_colors.dart';
-import '../services/backup_service.dart'; // ✅ Import Backup Service
+import '../services/backup_service.dart';
+import '../services/file_service.dart';
 
 import 'widgets/category_card.dart';
-// import 'widgets/progress_card.dart'; // ❌ Removed static card
 import 'widgets/folder_card.dart';
 import 'widgets/bottom_nav_bar.dart';
 
 import 'files_page.dart';
-import 'upload_page.dart';
 import 'create_folder_page.dart';
+import 'notification_list_page.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -22,11 +22,9 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   late Future<List<Map<String, dynamic>>> foldersFuture;
-  
-  // ✅ Instantiate the Backup Service
+
   final backupService = BackupService();
 
-  // ✅ Variables to store real file counts
   int photoCount = 0;
   int videoCount = 0;
   int musicCount = 0;
@@ -35,58 +33,55 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
-    foldersFuture = fetchFolders();
-    _fetchFileCounts(); 
+    _refreshAllData();
   }
 
-  /// 📂 FETCH USER FOLDERS
+  // ============================================================
+  // FETCH USER FOLDERS
+  // ============================================================
   Future<List<Map<String, dynamic>>> fetchFolders() async {
     final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+
+    if (user == null) return [];
 
     final res = await supabase
         .from('folders')
         .select()
+        .eq('user_id', user.id)
         .order('created_at', ascending: false);
 
     return List<Map<String, dynamic>>.from(res);
   }
 
-  /// 🔢 FETCH REAL FILE COUNTS
+  // ============================================================
+  // 🔥 FETCH FILE COUNTS (OPTIMIZED & INSTANT)
+  // ============================================================
   Future<void> _fetchFileCounts() async {
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
-    
     if (user == null) return;
 
-    final response = await supabase
-        .from('files')
-        .select('type')
-        .eq('user_id', user.id);
+    final results = await Future.wait([
+      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'image'),
+      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'video'),
+      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'music'),
+      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'app'),
+    ]);
 
-    int p = 0; // Photos
-    int v = 0; // Videos
-    int m = 0; // Music
-    int a = 0; // Apps
+    if (!mounted) return;
 
-    for (var file in response) {
-      final type = file['type'];
-      if (type == 'image') p++;
-      else if (type == 'video') v++;
-      else if (type == 'music') m++;
-      else if (type == 'app') a++;
-    }
-
-    if (mounted) {
-      setState(() {
-        photoCount = p;
-        videoCount = v;
-        musicCount = m;
-        appCount = a;
-      });
-    }
+    setState(() {
+      photoCount = results[0];
+      videoCount = results[1];
+      musicCount = results[2];
+      appCount = results[3];
+    });
   }
 
-  /// 🔄 REFRESH DATA
+  // ============================================================
+  // REFRESH ALL DATA
+  // ============================================================
   void _refreshAllData() {
     setState(() {
       foldersFuture = fetchFolders();
@@ -94,60 +89,53 @@ class _DashboardPageState extends State<DashboardPage> {
     _fetchFileCounts();
   }
 
-  /// 🗑 DELETE FOLDER LOGIC
+  // ============================================================
+  // DELETE FOLDER
+  // ============================================================
   Future<void> _deleteFolder(String folderId) async {
     final supabase = Supabase.instance.client;
+    final fileService = FileService();
+
     try {
-      // 1. Delete files inside
-      await supabase.from('files').delete().eq('folder_id', folderId);
+      final internalFiles = await supabase
+          .from('files')
+          .select('id, message_id')
+          .eq('folder_id', folderId);
 
-      // 2. Delete folder
-      final List<dynamic> deletedRows = await supabase
-          .from('folders')
-          .delete()
-          .eq('id', folderId)
-          .select();
+      await Future.wait(internalFiles.map((f) {
+        return fileService.deleteFile(
+          messageId: f['message_id'],
+          supabaseId: f['id'],
+          onSuccess: (_) {},
+          onError: (_) {},
+        );
+      }));
 
-      if (deletedRows.isEmpty) {
-        throw Exception("Permission denied: Check Supabase RLS Policies");
-      }
+      await supabase.from('folders').delete().eq('id', folderId);
 
       _refreshAllData();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Folder deleted successfully")),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Folder deleted")),
+      );
     } catch (e) {
       debugPrint("DELETE ERROR: $e");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Failed to delete. Check Database Permissions."),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
 
-  /// ⚠️ SHOW DELETE CONFIRMATION DIALOG
   void _showDeleteDialog(Map<String, dynamic> folder) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("Delete Folder?"),
-        content: Text("Are you sure you want to delete '${folder['name']}'?"),
+        content: Text("Delete '${folder['name']}' and its contents?"),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
             onPressed: () {
-              Navigator.pop(context); // Close dialog
-              _deleteFolder(folder['id']); // Call delete function
+              Navigator.pop(context);
+              _deleteFolder(folder['id']);
             },
             child: const Text("Delete", style: TextStyle(color: Colors.red)),
           ),
@@ -156,329 +144,224 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  // ============================================================
+  // 🔥 NAVIGATION FIX (AWAIT RESULT)
+  // ============================================================
+  Future<void> _navToPage(Widget page) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+    if (mounted) {
+      _refreshAllData();
+    }
+  }
+
+  // ============================================================
+  // UI
+  // ============================================================
   @override
   Widget build(BuildContext context) {
-    // 📏 RESPONSIVE CHECK
-    final double screenWidth = MediaQuery.of(context).size.width;
-    final bool isDesktop = screenWidth > 600;
-
-    final int crossAxisCount = isDesktop ? 4 : 2;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isDesktop = screenWidth > 600;
+    final crossAxisCount = isDesktop ? 4 : 2;
+    final userId = Supabase.instance.client.auth.currentUser?.id;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
-
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1200),
-            // HIDE SCROLLBAR
-            child: ScrollConfiguration(
-              behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
-              child: ListView(
-                padding: const EdgeInsets.only(
-                  left: 16,
-                  right: 16,
-                  top: 16,
-                  bottom: 120,
-                ),
-                children: [
-                  /// HEADER
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "My storage",
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const ProfilePage(),
-                            ),
-                          ).then((_) => _refreshAllData());
-                        },
-                        child: const CircleAvatar(
-                          child: Icon(Icons.person),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  /// SEARCH
-                  TextField(
-                    decoration: InputDecoration(
-                      hintText: "Search",
-                      prefixIcon: const Icon(Icons.search),
-                      filled: true,
-                      fillColor: Colors.white24,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  /// CATEGORIES
-                  Row(
-                    children: [
-                      Expanded(
-                        child: CategoryCard(
-                          icon: Icons.image,
-                          title: "Photos",
-                          percent: "$photoCount files",
-                          color: AppColors.blue,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const FilesPage(type: 'image'),
-                              ),
-                            ).then((_) => _refreshAllData());
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: CategoryCard(
-                          icon: Icons.videocam,
-                          title: "Videos",
-                          percent: "$videoCount files",
-                          color: AppColors.purple,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const FilesPage(type: 'video'),
-                              ),
-                            ).then((_) => _refreshAllData());
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  Row(
-                    children: [
-                      Expanded(
-                        child: CategoryCard(
-                          icon: Icons.music_note,
-                          title: "Music",
-                          percent: "$musicCount files",
-                          color: AppColors.green,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const FilesPage(type: 'music'),
-                              ),
-                            ).then((_) => _refreshAllData());
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: CategoryCard(
-                          icon: Icons.apps,
-                          title: "Apps",
-                          percent: "$appCount files",
-                          color: AppColors.orange,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const FilesPage(type: 'app'),
-                              ),
-                            ).then((_) => _refreshAllData());
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  /// ✅ REAL DYNAMIC PROGRESS CARD
-                  // Listens to the backup service status
-                  ValueListenableBuilder<double>(
-                    valueListenable: backupService.progressNotifier,
-                    builder: (context, progress, child) {
-                      return Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Icon(Icons.cloud_sync, color: Colors.black87),
-                                    const SizedBox(width: 10),
-                                    ValueListenableBuilder<String>(
-                                      valueListenable: backupService.statusNotifier,
-                                      builder: (context, status, _) => Text(
-                                        status == "Idle" ? "Ready to Backup" : status,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                // Start Backup Button
-                                IconButton(
-                                  onPressed: () {
-                                    backupService.startAutoBackup();
-                                  },
-                                  icon: const CircleAvatar(
-                                    radius: 14,
-                                    backgroundColor: AppColors.blue,
-                                    child: Icon(Icons.arrow_forward, size: 16, color: Colors.white),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            
-                            // Progress Bar
-                            LinearProgressIndicator(
-                              value: progress > 0 ? progress : null, // Indeterminate if 0
-                              backgroundColor: Colors.grey[200],
-                              color: AppColors.purple,
-                              minHeight: 8,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            const SizedBox(height: 8),
-                            
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text("Auto-sync gallery", style: TextStyle(color: Colors.black54, fontSize: 12)),
-                                Text("${(progress * 100).toInt()}%", style: const TextStyle(color: Colors.black54, fontSize: 12)),
-                              ],
-                            )
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  /// FOLDERS TITLE
-                  const Text(
-                    "All folders",
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  /// 📁 DYNAMIC FOLDERS
-                  FutureBuilder<List<Map<String, dynamic>>>(
-                    future: foldersFuture,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const SizedBox.shrink();
-                      }
-
-                      if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.all(20.0),
-                          child: Text("No folders yet"),
-                        );
-                      }
-
-                      final folders = snapshot.data!;
-
-                      return GridView.count(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        crossAxisCount: crossAxisCount,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
-                        childAspectRatio: 1.1,
-                        children: folders.map<Widget>((folder) {
-                          return FolderCard(
-                            icon: Icons.folder,
-                            title: folder['name'],
-                            info: "Tap to open",
-                            color: AppColors.blue,
-                            onLongPress: () => _showDeleteDialog(folder),
-                            onDelete: () => _showDeleteDialog(folder),
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => FilesPage(
-                                    type: 'all',
-                                    folderId: folder['id'],
-                                  ),
-                                ),
-                              ).then((_) => _refreshAllData());
-                            },
-                          );
-                        }).toList(),
-                      );
-                    },
-                  ),
-                ],
-              ),
+            child: ListView(
+              padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 120),
+              children: [
+                _buildHeader(),
+                const SizedBox(height: 16),
+                _buildSearchBar(),
+                const SizedBox(height: 20),
+                _buildCategoryGrid(),
+                const SizedBox(height: 20),
+                _buildBackupCard(),
+                const SizedBox(height: 20),
+                const Text("All folders", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 12),
+                _buildFolderGrid(crossAxisCount),
+              ],
             ),
           ),
         ),
       ),
+      // 🔥 UPDATED: Real-time Listener that works with Flutter
+      bottomNavigationBar: StreamBuilder<List<Map<String, dynamic>>>(
+        stream: Supabase.instance.client
+            .from('notifications')
+            .stream(primaryKey: ['id'])
+            .eq('user_id', userId ?? ''), 
+        builder: (context, snapshot) {
+          // Filter unread count manually to avoid .eq('is_read') stream errors
+          final notifications = snapshot.data ?? [];
+          final unreadCount = notifications.where((n) => n['is_read'] == false).length;
 
-      /// 🔻 BOTTOM NAV BAR
-      bottomNavigationBar: BottomNavBar(
-        onHome: () {},
-        onFiles: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => const FilesPage(type: 'all'),
-            ),
-          ).then((_) => _refreshAllData());
-        },
-        onCreateFolder: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => const CreateFolderPage(),
-            ),
-          ).then((created) {
-            if (created == true) {
-              _refreshAllData();
-            }
-          });
-        },
-        onProfile: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => const ProfilePage(),
-            ),
-          ).then((_) => _refreshAllData());
+          return BottomNavBar(
+            unreadCount: unreadCount, 
+            onHome: _refreshAllData,
+            onFiles: () => _navToPage(const FilesPage(type: 'all')),
+            onCreateFolder: () => _navToPage(const CreateFolderPage()),
+            onProfile: () => _navToPage(const ProfilePage()),
+            onNotifications: () => _navToPage(const NotificationListPage()),
+          );
         },
       ),
+    );
+  }
+
+  // ============================================================
+  // WIDGETS
+  // ============================================================
+  Widget _buildHeader() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        const Text("My storage", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+        GestureDetector(
+          onTap: () => _navToPage(const ProfilePage()),
+          child: const CircleAvatar(child: Icon(Icons.person)),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return TextField(
+      decoration: InputDecoration(
+        hintText: "Search",
+        prefixIcon: const Icon(Icons.search),
+        filled: true,
+        fillColor: Colors.white24,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: BorderSide.none),
+      ),
+    );
+  }
+
+  Widget _buildCategoryGrid() {
+    return Column(
+      children: [
+        Row(children: [
+          Expanded(
+              child: CategoryCard(
+                  icon: Icons.image,
+                  title: "Photos",
+                  percent: "$photoCount files",
+                  color: AppColors.blue,
+                  onTap: () => _navToPage(const FilesPage(type: 'image')))),
+          const SizedBox(width: 12),
+          Expanded(
+              child: CategoryCard(
+                  icon: Icons.videocam,
+                  title: "Videos",
+                  percent: "$videoCount files",
+                  color: AppColors.purple,
+                  onTap: () => _navToPage(const FilesPage(type: 'video')))),
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(
+              child: CategoryCard(
+                  icon: Icons.music_note,
+                  title: "Music",
+                  percent: "$musicCount files",
+                  color: AppColors.green,
+                  onTap: () => _navToPage(const FilesPage(type: 'music')))),
+          const SizedBox(width: 12),
+          Expanded(
+              child: CategoryCard(
+                  icon: Icons.apps,
+                  title: "Apps",
+                  percent: "$appCount files",
+                  color: AppColors.orange,
+                  onTap: () => _navToPage(const FilesPage(type: 'app')))),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildBackupCard() {
+    return ValueListenableBuilder<double>(
+      valueListenable: backupService.progressNotifier,
+      builder: (context, progress, _) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Row(children: [
+                  const Icon(Icons.cloud_sync, color: Colors.black87),
+                  const SizedBox(width: 10),
+                  ValueListenableBuilder<String>(
+                    valueListenable: backupService.statusNotifier,
+                    builder: (_, status, __) => Text(
+                      status == "Idle" ? "Ready to Backup" : status,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ]),
+                IconButton(
+                  onPressed: () => backupService.startAutoBackup(),
+                  icon: const CircleAvatar(
+                    radius: 14,
+                    backgroundColor: AppColors.blue,
+                    child: Icon(Icons.arrow_forward, size: 16, color: Colors.white),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              LinearProgressIndicator(
+                value: progress > 0 ? progress : null,
+                backgroundColor: Colors.grey[200],
+                color: AppColors.purple,
+                minHeight: 8,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              const SizedBox(height: 8),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                const Text("Auto-sync gallery", style: TextStyle(color: Colors.black54, fontSize: 12)),
+                Text("${(progress * 100).toInt()}%", style: const TextStyle(color: Colors.black54, fontSize: 12)),
+              ])
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildFolderGrid(int crossAxisCount) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: foldersFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Padding(padding: EdgeInsets.all(20), child: Text("No folders yet"));
+        }
+
+        return GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: crossAxisCount,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: 1.1,
+          children: snapshot.data!
+              .map<Widget>((folder) => FolderCard(
+                    icon: Icons.folder,
+                    title: folder['name'],
+                    info: "Tap to open",
+                    color: AppColors.blue,
+                    onLongPress: () => _showDeleteDialog(folder),
+                    onDelete: () => _showDeleteDialog(folder),
+                    onTap: () => _navToPage(FilesPage(type: 'all', folderId: folder['id'])),
+                  ))
+              .toList(),
+        );
+      },
     );
   }
 }

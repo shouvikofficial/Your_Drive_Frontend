@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ✅ Added for Biometric settings
 
 import '../theme/app_colors.dart';
 import '../ui/dashboard_page.dart';
 import '../auth/signup_page.dart';
+import '../services/biometric_service.dart'; // ✅ Added for Auto-Unlock
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -22,10 +24,35 @@ class _LoginPageState extends State<LoginPage> {
   bool loading = false;
 
   @override
+  void initState() {
+    super.initState();
+    _checkBiometricAuth(); // ⚡ Check for Fingerprint on startup
+  }
+
+  @override
   void dispose() {
     emailController.dispose();
     passwordController.dispose();
     super.dispose();
+  }
+
+  // ================= BIOMETRIC CHECK =================
+  Future<void> _checkBiometricAuth() async {
+    final prefs = await SharedPreferences.getInstance();
+    final isEnabled = prefs.getBool('biometric_enabled') ?? false;
+
+    if (isEnabled) {
+      // 🖐️ Prompt for fingerprint immediately
+      bool authenticated = await BiometricService.authenticate();
+      
+      if (authenticated && mounted) {
+        // ✅ Success! Go to Dashboard
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const DashboardPage()),
+        );
+      }
+    }
   }
 
   // ================= EMAIL LOGIN =================
@@ -79,7 +106,11 @@ class _LoginPageState extends State<LoginPage> {
 
       final GoogleSignIn googleSignIn = GoogleSignIn(
         serverClientId: webClientId,
+        scopes: ['email', 'profile'],
       );
+
+      // 🛑 FIX: Force account selection every time
+      await googleSignIn.signOut(); 
 
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
 
@@ -216,8 +247,8 @@ class _LoginPageState extends State<LoginPage> {
                               : const Text(
                                   "Login",
                                   style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold),
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold),
                                 ),
                         ),
                       ),

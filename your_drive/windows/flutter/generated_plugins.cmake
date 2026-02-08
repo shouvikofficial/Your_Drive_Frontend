@@ -6,6 +6,8 @@ list(APPEND FLUTTER_PLUGIN_LIST
   app_links
   battery_plus
   connectivity_plus
+  firebase_core
+  local_auth_windows
   permission_handler_windows
   url_launcher_windows
   video_player_win

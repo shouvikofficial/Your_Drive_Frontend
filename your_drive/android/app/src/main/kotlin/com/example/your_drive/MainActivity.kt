@@ -1,5 +1,7 @@
 package com.example.your_drive
 
-import io.flutter.embedding.android.FlutterActivity
+// ✅ 1. Change the import
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// ✅ 2. Extend FlutterFragmentActivity instead of FlutterActivity
+class MainActivity: FlutterFragmentActivity()
