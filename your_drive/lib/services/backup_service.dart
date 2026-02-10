@@ -1,10 +1,12 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:math';
-import 'package:flutter/material.dart'; // ✅ REQUIRED for ValueNotifier
-import 'package:crypto/crypto.dart'; 
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:dio/dio.dart' as dio; 
+import 'package:dio/dio.dart' as dio;
 import 'package:photo_manager/photo_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,7 +14,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:workmanager/workmanager.dart';
+import 'package:cryptography/cryptography.dart';
+import 'package:path_provider/path_provider.dart';
+
 import '../config/env.dart';
+import '../services/vault_service.dart';
 
 // 🛑 TOP-LEVEL FUNCTION
 @pragma('vm:entry-point')
@@ -44,6 +50,7 @@ class BackupService {
   // 🧠 Memory Cache
   Set<String> _serverHashes = {};
   bool _hasSyncedWithServer = false;
+  String? _lastIV;
 
   // ---------------------------------------------------------
   // ✅ 1. BACKGROUND SERVICE SETUP
@@ -53,12 +60,22 @@ class BackupService {
     await Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
   }
 
-  void scheduleBackgroundBackup() {
+  Future<void> scheduleBackgroundBackup() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    
+    // Read prefs to apply correct constraints to the system job
+    final prefs = await SharedPreferences.getInstance();
+    final wifiOnly = prefs.getBool('wifi_only') ?? true;
+    final chargingOnly = prefs.getBool('charging_only') ?? false;
+
     Workmanager().registerPeriodicTask(
       "1", "autoBackupTask",
       frequency: const Duration(minutes: 15),
-      constraints: Constraints(networkType: NetworkType.connected, requiresBatteryNotLow: true),
+      constraints: Constraints(
+        networkType: wifiOnly ? NetworkType.unmetered : NetworkType.connected,
+        requiresBatteryNotLow: true,
+        requiresCharging: chargingOnly,
+      ),
       existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
     );
   }
@@ -91,7 +108,7 @@ class BackupService {
   }
 
   // ---------------------------------------------------------
-  // 🚀 3. OPTIMIZED BACKUP LOGIC (Pagination + Instant Trigger)
+  // 🚀 3. OPTIMIZED BACKUP LOGIC
   // ---------------------------------------------------------
   void stopBackup() {
     _isBackingUp = false;
@@ -172,7 +189,7 @@ class BackupService {
              return; 
           }
 
-          // ✅ CLEAN UI UPDATE (Numbers Only)
+          // ✅ CLEAN UI UPDATE
           statusNotifier.value = "Syncing ${processedCount + 1} / $totalAssets";
           progressNotifier.value = processedCount / totalAssets;
           processedCount++;
@@ -192,8 +209,16 @@ class BackupService {
               uploadedIds.add(asset.id);
               await prefs.setStringList('uploaded_assets', uploadedIds.toList());
             } else {
-              // 🚀 UPLOAD (Status remains "Syncing X / Y")
-              bool success = await _uploadChunkedFile(file, fileHash);
+              // 🔐 ENCRYPT
+              final encrypted = await _createEncryptedTempFile(file);
+              if (encrypted == null) continue;
+
+              // 🚀 UPLOAD
+              bool success = await _uploadChunkedFile(encrypted, fileHash, file.path);
+              
+              // CLEANUP TEMP FILE
+              if (await encrypted.exists()) await encrypted.delete();
+
               if (success) {
                 uploadedIds.add(asset.id);
                 _serverHashes.add(fileHash); 
@@ -219,7 +244,7 @@ class BackupService {
   }
 
   // ---------------------------------------------------------
-  // 🔥 HELPER: INSTANT CONSTRAINT CHECKER
+  // 🔥 HELPER: INSTANT CONSTRAINT CHECKER (FIXED)
   // ---------------------------------------------------------
   Future<bool> _checkConstraints(SharedPreferences prefs) async {
     await prefs.reload(); // ✅ Catch UI toggles instantly
@@ -230,18 +255,20 @@ class BackupService {
       return false;
     }
 
+    // ✅ FIXED WI-FI CHECK
     bool wifiOnly = prefs.getBool('wifi_only') ?? true;
     if (wifiOnly) {
-      final connectivity = await Connectivity().checkConnectivity();
-      bool isWifi = connectivity.contains(ConnectivityResult.wifi) || 
-                    connectivity.contains(ConnectivityResult.ethernet);
+      final connectivityResult = await Connectivity().checkConnectivity();
+      bool hasWifi = connectivityResult.contains(ConnectivityResult.wifi) || 
+                     connectivityResult.contains(ConnectivityResult.ethernet);
       
-      if (!isWifi) {
+      if (!hasWifi) {
         statusNotifier.value = "Waiting for Wi-Fi...";
         return false; 
       }
     }
 
+    // ✅ FIXED CHARGING CHECK
     bool chargingOnly = prefs.getBool('charging_only') ?? false;
     if (chargingOnly) {
       final battery = await Battery().batteryState;
@@ -255,118 +282,155 @@ class BackupService {
   }
 
   // ---------------------------------------------------------
-  // ☁️ SERVER SYNC
+  // ENCRYPTION (ZERO-KNOWLEDGE)
   // ---------------------------------------------------------
-  Future<void> _syncServerState(String userId) async {
-    if (_hasSyncedWithServer) return;
+  Future<File?> _createEncryptedTempFile(File original) async {
     try {
-      final supabase = Supabase.instance.client;
-      final response = await supabase
-          .from('files')
-          .select('hash')
-          .eq('user_id', userId);
-      
-      if (response != null) {
-        _serverHashes = (response as List).map((e) => e['hash'] as String).toSet();
-        _hasSyncedWithServer = true;
-      }
-    } catch (_) {}
+      final nonce = VaultService().generateNonce();
+      final key = await VaultService().getSecretKey();
+      final algo = AesGcm.with256bits();
+
+      final bytes = await original.readAsBytes();
+      final box = await algo.encrypt(bytes, secretKey: key, nonce: nonce);
+      final encryptedBytes = box.cipherText + box.mac.bytes;
+
+      final dir = await getTemporaryDirectory();
+      final path = "${dir.path}/${original.uri.pathSegments.last}.enc";
+
+      final file = File(path);
+      await file.writeAsBytes(encryptedBytes);
+
+      _lastIV = base64Encode(nonce);
+      return file;
+    } catch (_) {
+      return null;
+    }
   }
 
   // ---------------------------------------------------------
-  // ⬆️ CHUNKED UPLOAD
+  // CHUNK UPLOAD
   // ---------------------------------------------------------
-  Future<bool> _uploadChunkedFile(File file, String hash) async {
+  Future<bool> _uploadChunkedFile(File file, String hash, String originalPath) async {
     try {
       final dioClient = dio.Dio();
       final url = "${Env.backendBaseUrl}/api/upload-chunk";
-      final fileName = file.path.split(Platform.pathSeparator).last;
-      final fileSize = await file.length();
-      const chunkSize = 5 * 1024 * 1024;
-      final totalChunks = (fileSize / chunkSize).ceil();
-      final uploadId = "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}";
-      final raf = file.openSync();
+      // Use original filename, not the .enc one
+      final name = originalPath.split(Platform.pathSeparator).last;
+      final size = await file.length();
 
+      const chunkSize = 5 * 1024 * 1024;
+      final totalChunks = (size / chunkSize).ceil();
+      final uploadId = "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}";
+
+      final raf = file.openSync();
       dio.Response? response;
 
       for (int i = 0; i < totalChunks; i++) {
-        // 🔥 Instant Pause Check inside chunks
-        final prefs = await SharedPreferences.getInstance();
-        if (!await _checkConstraints(prefs)) {
-          raf.closeSync();
-          return false;
-        }
-
         final start = i * chunkSize;
-        final end = min(start + chunkSize, fileSize);
+        final end = min(start + chunkSize, size);
         final length = end - start;
+
         raf.setPositionSync(start);
-        final chunkBytes = raf.readSync(length);
+        final chunk = raf.readSync(length);
 
         int retry = 0;
-        bool chunkSuccess = false;
-        while (!chunkSuccess && retry < 3) {
+        bool ok = false;
+
+        while (!ok && retry < 3) {
           try {
-            response = await dioClient.post(url, data: dio.FormData.fromMap({
-              "file": dio.MultipartFile.fromBytes(chunkBytes, filename: fileName),
-              "chunk_index": i, "total_chunks": totalChunks, "file_name": fileName, "upload_id": uploadId
-            }), options: dio.Options(sendTimeout: const Duration(minutes: 2)));
-            chunkSuccess = true;
-          } catch (e) {
+            response = await dioClient.post(
+              url,
+              data: dio.FormData.fromMap({
+                "file": dio.MultipartFile.fromBytes(chunk, filename: name),
+                "chunk_index": i,
+                "total_chunks": totalChunks,
+                "file_name": name,
+                "upload_id": uploadId,
+              }),
+            );
+            ok = true;
+          } catch (_) {
             retry++;
             await Future.delayed(const Duration(seconds: 2));
           }
         }
-        if (!chunkSuccess) { raf.closeSync(); return false; }
+
+        if (!ok) {
+          raf.closeSync();
+          return false;
+        }
       }
+
       raf.closeSync();
 
       if (response?.statusCode == 200) {
-        await _saveToSupabase(response!.data, fileName, fileSize, hash);
+        await _saveToSupabase(response!.data, name, size, hash, _lastIV);
         return true;
       }
-      return false;
-    } catch (e) {
-      return false;
-    }
-  }
 
-  // 🟢 SAVE TO SUPABASE
-  Future<bool> _saveToSupabase(Map data, String name, int size, String hash) async {
-    try {
-       await Supabase.instance.client.from('files').insert({
-        'user_id': Supabase.instance.client.auth.currentUser!.id,
-        'file_id': data['file_id'],
-        'message_id': data['message_id'],
-        'name': name,
-        'type': _getFileType(name, data['type']), 
-        'folder_id': null,
-        'size': size,
-        'hash': hash
-      });
-      return true;
+      return false;
     } catch (_) {
       return false;
     }
   }
 
-  // 🧠 SMART TYPE DETECTOR
-  String _getFileType(String fileName, String? serverType) {
-    final ext = fileName.split('.').last.toLowerCase();
-    
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'bmp', 'svg'].contains(ext)) return 'image';
-    if (['mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', '3gp'].contains(ext)) return 'video';
-    if (['mp3', 'wav', 'aac', 'flac', 'm4a', 'ogg', 'wma'].contains(ext)) return 'music';
-    if (['apk', 'exe', 'dmg', 'iso', 'msi', 'deb', 'ipa', 'xapk'].contains(ext)) return 'app';
-    if (['zip', 'rar', '7z', 'tar', 'gz'].contains(ext)) return 'archive';
-
-    return serverType ?? 'document';
+  // ---------------------------------------------------------
+  // SAVE METADATA
+  // ---------------------------------------------------------
+  Future<void> _saveToSupabase(
+    Map data,
+    String name,
+    int size,
+    String hash,
+    String? iv,
+  ) async {
+    await Supabase.instance.client.from('files').insert({
+      'user_id': Supabase.instance.client.auth.currentUser!.id,
+      'file_id': data['file_id'],
+      'message_id': data['message_id'],
+      'name': name,
+      'type': _getFileType(name), // ✅ UPDATED to match your requested logic
+      'size': size,
+      'hash': hash,
+      'iv': iv,
+      'folder_id': null,
+    });
   }
 
-  // 🛠️ HASH HELPER
+  // ---------------------------------------------------------
+  // HELPERS
+  // ---------------------------------------------------------
+  Future<void> _syncServerState(String userId) async {
+    if (_hasSyncedWithServer) return;
+
+    final res = await Supabase.instance.client
+        .from('files')
+        .select('hash')
+        .eq('user_id', userId);
+
+    _serverHashes = (res as List).map((e) => e['hash'] as String).toSet();
+    _hasSyncedWithServer = true;
+  }
+
   Future<String> _getFileHash(File file) async {
     final stream = file.openRead();
     return (await sha256.bind(stream).first).toString();
+  }
+
+  // ✅ Consistent File Type Logic
+  String _getFileType(String fileName) {
+    final ext = fileName.split('.').last.toLowerCase();
+
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'].contains(ext)) return 'image';
+    if (['mp4', 'mov', 'avi', 'mkv', 'webm'].contains(ext)) return 'video';
+    if (['mp3', 'wav', 'aac', 'flac'].contains(ext)) return 'music';
+    
+    // Explicitly grouping docs & apps together so they show up in your folders
+    if (['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'csv', 'apk', 'exe', 'dmg', 'zip', 'rar'].contains(ext)) {
+      return 'document';
+    }
+
+    return 'document';
   }
 
   void _stop(String msg) {

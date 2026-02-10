@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_colors.dart';
 import '../services/biometric_service.dart'; 
-import '../services/backup_service.dart'; // ✅ Import Backup Service
+import '../services/backup_service.dart';
+import 'devices_sessions_page.dart'; // ✅ Import Backup Service
 
 /// ------------------------------------------------------
 /// ☁️ BACKUP & SYNC PAGE (With Instant Triggers)
@@ -228,6 +229,7 @@ class _PrivacyPageState extends State<PrivacyPage> {
         padding: const EdgeInsets.all(20),
         children: [
           const SectionHeader(title: "Security"),
+
           SettingsTile(
             icon: Icons.fingerprint,
             title: "Biometric Unlock",
@@ -238,6 +240,7 @@ class _PrivacyPageState extends State<PrivacyPage> {
               onChanged: _toggleBiometric,
             ),
           ),
+
           SettingsTile(
             icon: Icons.security,
             title: "Two-Factor Authentication",
@@ -248,19 +251,33 @@ class _PrivacyPageState extends State<PrivacyPage> {
               onChanged: (val) => setState(() => _twoFactorEnabled = val),
             ),
           ),
+
           SettingsTile(
             icon: Icons.lock_reset,
             title: "Change Password",
             onTap: () {},
           ),
 
+          /// ⭐ NEW — DEVICES & SESSIONS
+          SettingsTile(
+            icon: Icons.devices_outlined,
+            title: "Devices & Sessions",
+            subtitle: "Manage logged-in devices",
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DevicesSessionsPage()),
+            ),
+          ),
+
           const SizedBox(height: 24),
           const SectionHeader(title: "Data"),
+
           SettingsTile(
             icon: Icons.history,
             title: "Clear Search History",
             onTap: () {},
           ),
+
           SettingsTile(
             icon: Icons.delete_forever,
             title: "Delete Account",
@@ -273,6 +290,7 @@ class _PrivacyPageState extends State<PrivacyPage> {
     );
   }
 }
+
 
 /// ------------------------------------------------------
 /// ❓ HELP & SUPPORT PAGE
@@ -322,6 +340,31 @@ class HelpPage extends StatelessWidget {
           ),
           
           const SizedBox(height: 40),
+
+          /// 👨‍💻 DEVELOPER CREDIT
+          const Center(
+            child: Column(
+              children: [
+                Text(
+                  "Developed by",
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  "Shouvik",
+                  style: TextStyle(
+                    color: Colors.black87,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          /// 📦 APP VERSION
           const Center(
             child: Text(
               "Version 1.0.0",
@@ -333,6 +376,7 @@ class HelpPage extends StatelessWidget {
     );
   }
 }
+
 
 /// ------------------------------------------------------
 /// 👤 ACCOUNT SETTINGS PAGE
@@ -510,4 +554,5 @@ class SettingsTile extends StatelessWidget {
       ),
     );
   }
+  
 }

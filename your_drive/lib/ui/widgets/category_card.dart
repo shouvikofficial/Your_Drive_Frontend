@@ -30,24 +30,32 @@ class CategoryCard extends StatelessWidget {
               child: Icon(icon, color: color),
             ),
             const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+            // FIX: Wrap the Column in Expanded to prevent overflow
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center, // Vertically center text
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1, // Prevent multi-line expansion
+                    overflow: TextOverflow.ellipsis, // Add "..." if too long
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-                Text(
-                  percent,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.black54,
+                  Text(
+                    percent,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ],
         ),

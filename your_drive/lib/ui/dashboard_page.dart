@@ -4,6 +4,7 @@ import 'package:your_drive/ui/profile_page.dart';
 import '../theme/app_colors.dart';
 import '../services/backup_service.dart';
 import '../services/file_service.dart';
+import '../services/upload_manager.dart'; // ✅ Import UploadManager
 
 import 'widgets/category_card.dart';
 import 'widgets/folder_card.dart';
@@ -12,6 +13,7 @@ import 'widgets/bottom_nav_bar.dart';
 import 'files_page.dart';
 import 'create_folder_page.dart';
 import 'notification_list_page.dart';
+import 'upload_page.dart'; // ✅ Import UploadPage for navigation
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -22,13 +24,12 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   late Future<List<Map<String, dynamic>>> foldersFuture;
-
   final backupService = BackupService();
 
   int photoCount = 0;
   int videoCount = 0;
   int musicCount = 0;
-  int appCount = 0;
+  int docCount = 0;
 
   @override
   void initState() {
@@ -37,12 +38,11 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   // ============================================================
-  // FETCH USER FOLDERS
+  // DATA LOGIC
   // ============================================================
   Future<List<Map<String, dynamic>>> fetchFolders() async {
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
-
     if (user == null) return [];
 
     final res = await supabase
@@ -54,9 +54,6 @@ class _DashboardPageState extends State<DashboardPage> {
     return List<Map<String, dynamic>>.from(res);
   }
 
-  // ============================================================
-  // 🔥 FETCH FILE COUNTS (OPTIMIZED & INSTANT)
-  // ============================================================
   Future<void> _fetchFileCounts() async {
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
@@ -66,22 +63,18 @@ class _DashboardPageState extends State<DashboardPage> {
       supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'image'),
       supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'video'),
       supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'music'),
-      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'app'),
+      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'document'),
     ]);
 
     if (!mounted) return;
-
     setState(() {
       photoCount = results[0];
       videoCount = results[1];
       musicCount = results[2];
-      appCount = results[3];
+      docCount = results[3];
     });
   }
 
-  // ============================================================
-  // REFRESH ALL DATA
-  // ============================================================
   void _refreshAllData() {
     setState(() {
       foldersFuture = fetchFolders();
@@ -89,9 +82,6 @@ class _DashboardPageState extends State<DashboardPage> {
     _fetchFileCounts();
   }
 
-  // ============================================================
-  // DELETE FOLDER
-  // ============================================================
   Future<void> _deleteFolder(String folderId) async {
     final supabase = Supabase.instance.client;
     final fileService = FileService();
@@ -112,13 +102,8 @@ class _DashboardPageState extends State<DashboardPage> {
       }));
 
       await supabase.from('folders').delete().eq('id', folderId);
-
       _refreshAllData();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Folder deleted")),
-      );
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Folder deleted")));
     } catch (e) {
       debugPrint("DELETE ERROR: $e");
     }
@@ -128,8 +113,9 @@ class _DashboardPageState extends State<DashboardPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text("Delete Folder?"),
-        content: Text("Delete '${folder['name']}' and its contents?"),
+        content: Text("Delete '${folder['name']}' and its contents? This cannot be undone."),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
@@ -144,18 +130,13 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // ============================================================
-  // 🔥 NAVIGATION FIX (AWAIT RESULT)
-  // ============================================================
   Future<void> _navToPage(Widget page) async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
-    if (mounted) {
-      _refreshAllData();
-    }
+    if (mounted) _refreshAllData();
   }
 
   // ============================================================
-  // UI
+  // UI BUILD
   // ============================================================
   @override
   Widget build(BuildContext context) {
@@ -171,37 +152,39 @@ class _DashboardPageState extends State<DashboardPage> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1200),
             child: ListView(
-              padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 120),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               children: [
                 _buildHeader(),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 _buildSearchBar(),
-                const SizedBox(height: 20),
+                const SizedBox(height: 30),
                 _buildCategoryGrid(),
-                const SizedBox(height: 20),
+                const SizedBox(height: 30),
                 _buildBackupCard(),
-                const SizedBox(height: 20),
-                const Text("All folders", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 12),
+                const SizedBox(height: 30),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text("All Folders", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
+                    TextButton(onPressed: _refreshAllData, child: const Text("Refresh", style: TextStyle(color: AppColors.blue))),
+                  ],
+                ),
+                const SizedBox(height: 16),
                 _buildFolderGrid(crossAxisCount),
+                const SizedBox(height: 120), // Bottom padding for nav bar
               ],
             ),
           ),
         ),
       ),
-      // 🔥 UPDATED: Real-time Listener that works with Flutter
       bottomNavigationBar: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: Supabase.instance.client
-            .from('notifications')
-            .stream(primaryKey: ['id'])
-            .eq('user_id', userId ?? ''), 
+        stream: Supabase.instance.client.from('notifications').stream(primaryKey: ['id']).eq('user_id', userId ?? ''),
         builder: (context, snapshot) {
-          // Filter unread count manually to avoid .eq('is_read') stream errors
           final notifications = snapshot.data ?? [];
           final unreadCount = notifications.where((n) => n['is_read'] == false).length;
 
           return BottomNavBar(
-            unreadCount: unreadCount, 
+            unreadCount: unreadCount,
             onHome: _refreshAllData,
             onFiles: () => _navToPage(const FilesPage(type: 'all')),
             onCreateFolder: () => _navToPage(const CreateFolderPage()),
@@ -213,30 +196,132 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // ============================================================
-  // WIDGETS
-  // ============================================================
-  Widget _buildHeader() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        const Text("My storage", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-        GestureDetector(
-          onTap: () => _navToPage(const ProfilePage()),
-          child: const CircleAvatar(child: Icon(Icons.person)),
-        ),
-      ],
-    );
-  }
+  // ✅ UPDATED HEADER WITH BACKGROUND UPLOAD INDICATOR
+ Widget _buildHeader() {
+  return ListenableBuilder(
+    listenable: UploadManager(),
+    builder: (context, child) {
+      final manager = UploadManager();
+      final isUploading = manager.isUploading;
+      
+      // Calculate total pending items
+      final pendingCount = manager.uploadQueue.where((i) => 
+          i.status == 'waiting' || i.status == 'uploading').length;
+      
+      final hasUploads = pendingCount > 0 || isUploading;
+
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.end, // Align button with text baseline
+        children: [
+          // Left: Title Section
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Storage",
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                "My Cloud",
+                style: TextStyle(
+                  fontSize: 32, // Larger, bolder title
+                  fontWeight: FontWeight.w800,
+                  color: Colors.black87,
+                  letterSpacing: -1.2, // Tight tracking for modern look
+                  height: 1.0,
+                ),
+              ),
+            ],
+          ),
+
+          // Right: Upload Status Pill (Conditional)
+          if (hasUploads)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6), // Align visually with text
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () {
+                    Navigator.push(
+                      context, 
+                      MaterialPageRoute(builder: (_) => const UploadPage())
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(30),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppColors.blue.withOpacity(0.08), // Subtle tint
+                      borderRadius: BorderRadius.circular(30),
+                      border: Border.all(
+                        color: AppColors.blue.withOpacity(0.2), 
+                        width: 1
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isUploading)
+                          SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              valueColor: const AlwaysStoppedAnimation<Color>(AppColors.blue),
+                              strokeCap: StrokeCap.round, // Soft rounded ends
+                            ),
+                          )
+                        else
+                          const Icon(
+                            Icons.cloud_queue_rounded, // Modern outlined icon
+                            size: 18, 
+                            color: AppColors.blue
+                          ),
+                        
+                        const SizedBox(width: 8),
+                        
+                        Text(
+                          isUploading ? "Uploading..." : "$pendingCount Pending",
+                          style: const TextStyle(
+                            color: AppColors.blue,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+    },
+  );
+}
 
   Widget _buildSearchBar() {
-    return TextField(
-      decoration: InputDecoration(
-        hintText: "Search",
-        prefixIcon: const Icon(Icons.search),
-        filled: true,
-        fillColor: Colors.white24,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: BorderSide.none),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 15, offset: const Offset(0, 8))],
+      ),
+      child: TextField(
+        decoration: InputDecoration(
+          hintText: "Search your files...",
+          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 15),
+          prefixIcon: const Icon(Icons.search, color: AppColors.blue),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 15),
+        ),
       ),
     );
   }
@@ -245,39 +330,39 @@ class _DashboardPageState extends State<DashboardPage> {
     return Column(
       children: [
         Row(children: [
-          Expanded(
-              child: CategoryCard(
-                  icon: Icons.image,
-                  title: "Photos",
-                  percent: "$photoCount files",
-                  color: AppColors.blue,
-                  onTap: () => _navToPage(const FilesPage(type: 'image')))),
-          const SizedBox(width: 12),
-          Expanded(
-              child: CategoryCard(
-                  icon: Icons.videocam,
-                  title: "Videos",
-                  percent: "$videoCount files",
-                  color: AppColors.purple,
-                  onTap: () => _navToPage(const FilesPage(type: 'video')))),
+          Expanded(child: CategoryCard(
+            icon: Icons.image, 
+            title: "Photos", 
+            percent: "$photoCount files", 
+            color: AppColors.blue, 
+            onTap: () => _navToPage(const FilesPage(type: 'image'))
+          )),
+          const SizedBox(width: 16),
+          Expanded(child: CategoryCard(
+            icon: Icons.videocam, 
+            title: "Videos", 
+            percent: "$videoCount files", 
+            color: AppColors.purple, 
+            onTap: () => _navToPage(const FilesPage(type: 'video'))
+          )),
         ]),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         Row(children: [
-          Expanded(
-              child: CategoryCard(
-                  icon: Icons.music_note,
-                  title: "Music",
-                  percent: "$musicCount files",
-                  color: AppColors.green,
-                  onTap: () => _navToPage(const FilesPage(type: 'music')))),
-          const SizedBox(width: 12),
-          Expanded(
-              child: CategoryCard(
-                  icon: Icons.apps,
-                  title: "Apps",
-                  percent: "$appCount files",
-                  color: AppColors.orange,
-                  onTap: () => _navToPage(const FilesPage(type: 'app')))),
+          Expanded(child: CategoryCard(
+            icon: Icons.music_note, 
+            title: "Music", 
+            percent: "$musicCount files", 
+            color: AppColors.green, 
+            onTap: () => _navToPage(const FilesPage(type: 'music'))
+          )),
+          const SizedBox(width: 16),
+          Expanded(child: CategoryCard(
+            icon: Icons.description_rounded, 
+            title: "Documents", 
+            percent: "$docCount files", 
+            color: Colors.teal, 
+            onTap: () => _navToPage(const FilesPage(type: 'document'))
+          )),
         ]),
       ],
     );
@@ -288,45 +373,57 @@ class _DashboardPageState extends State<DashboardPage> {
       valueListenable: backupService.progressNotifier,
       builder: (context, progress, _) {
         return Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [AppColors.blue, AppColors.blue.withOpacity(0.8)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [BoxShadow(color: AppColors.blue.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10))],
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Row(children: [
-                  const Icon(Icons.cloud_sync, color: Colors.black87),
-                  const SizedBox(width: 10),
-                  ValueListenableBuilder<String>(
-                    valueListenable: backupService.statusNotifier,
-                    builder: (_, status, __) => Text(
-                      status == "Idle" ? "Ready to Backup" : status,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Auto Backup", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      SizedBox(height: 4),
+                      Text("Cloud Sync Active", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    ],
+                  ),
+                  GestureDetector(
+                    onTap: () => backupService.startAutoBackup(),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: const BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
+                      child: const Icon(Icons.sync, color: Colors.white),
                     ),
                   ),
-                ]),
-                IconButton(
-                  onPressed: () => backupService.startAutoBackup(),
-                  icon: const CircleAvatar(
-                    radius: 14,
-                    backgroundColor: AppColors.blue,
-                    child: Icon(Icons.arrow_forward, size: 16, color: Colors.white),
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 16),
-              LinearProgressIndicator(
-                value: progress > 0 ? progress : null,
-                backgroundColor: Colors.grey[200],
-                color: AppColors.purple,
-                minHeight: 8,
-                borderRadius: BorderRadius.circular(10),
+                ],
               ),
-              const SizedBox(height: 8),
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                const Text("Auto-sync gallery", style: TextStyle(color: Colors.black54, fontSize: 12)),
-                Text("${(progress * 100).toInt()}%", style: const TextStyle(color: Colors.black54, fontSize: 12)),
-              ])
+              const SizedBox(height: 24),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: LinearProgressIndicator(
+                  value: progress > 0 ? progress : null,
+                  backgroundColor: Colors.white12,
+                  color: Colors.white,
+                  minHeight: 8,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ValueListenableBuilder<String>(
+                valueListenable: backupService.statusNotifier,
+                builder: (_, status, __) => Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(status == "Idle" ? "Everything up to date" : status, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                    if (progress > 0) Text("${(progress * 100).toInt()}%", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
             ],
           ),
         );
@@ -338,28 +435,44 @@ class _DashboardPageState extends State<DashboardPage> {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: foldersFuture,
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
         if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return const Padding(padding: EdgeInsets.all(20), child: Text("No folders yet"));
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(40),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24), border: Border.all(color: Colors.grey[200]!)),
+            child: Column(
+              children: [
+                Icon(Icons.create_new_folder_outlined, color: Colors.grey[300], size: 48),
+                const SizedBox(height: 12),
+                const Text("No folders created yet", style: TextStyle(color: Colors.black38)),
+              ],
+            ),
+          );
         }
 
-        return GridView.count(
+        return GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: crossAxisCount,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.1,
-          children: snapshot.data!
-              .map<Widget>((folder) => FolderCard(
-                    icon: Icons.folder,
-                    title: folder['name'],
-                    info: "Tap to open",
-                    color: AppColors.blue,
-                    onLongPress: () => _showDeleteDialog(folder),
-                    onDelete: () => _showDeleteDialog(folder),
-                    onTap: () => _navToPage(FilesPage(type: 'all', folderId: folder['id'])),
-                  ))
-              .toList(),
+          itemCount: snapshot.data!.length,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+            childAspectRatio: 1.0,
+          ),
+          itemBuilder: (context, index) {
+            final folder = snapshot.data![index];
+            return FolderCard(
+              icon: Icons.folder_rounded,
+              title: folder['name'],
+              info: "Items inside", 
+              color: AppColors.blue,
+              onLongPress: () => _showDeleteDialog(folder),
+              onDelete: () => _showDeleteDialog(folder),
+              onTap: () => _navToPage(FilesPage(type: 'all', folderId: folder['id'])),
+            );
+          },
         );
       },
     );

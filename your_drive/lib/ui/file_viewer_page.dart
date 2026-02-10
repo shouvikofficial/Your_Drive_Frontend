@@ -1,8 +1,18 @@
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:photo_view/photo_view.dart'; // For Image Zoom
-import 'package:video_player/video_player.dart'; // For Video Logic
-import 'package:chewie/chewie.dart'; // For Video UI
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:http/http.dart' as http;
+import 'package:cryptography/cryptography.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:photo_view/photo_view.dart';
+import 'package:video_player/video_player.dart';
+import 'package:chewie/chewie.dart';
+import 'package:open_filex/open_filex.dart';
+
 import '../config/env.dart';
+import '../services/vault_service.dart';
 
 class FileViewerPage extends StatefulWidget {
   final String messageId;
@@ -21,87 +31,205 @@ class FileViewerPage extends StatefulWidget {
 }
 
 class _FileViewerPageState extends State<FileViewerPage> {
+  bool _isLoading = true;
+  String? _error;
+
+  Uint8List? _imageBytes;
+
   VideoPlayerController? _videoController;
   ChewieController? _chewieController;
+  File? _tempFile;
 
   @override
   void initState() {
     super.initState();
-    if (widget.type == 'video') {
-      _initializeVideo();
-    }
-  }
-
-  Future<void> _initializeVideo() async {
-    final url = "${Env.backendBaseUrl}/api/file/${widget.messageId}";
-    _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
-
-    await _videoController!.initialize();
-
-    _chewieController = ChewieController(
-      videoPlayerController: _videoController!,
-      autoPlay: true,
-      looping: false,
-      aspectRatio: _videoController!.value.aspectRatio,
-      errorBuilder: (context, errorMessage) {
-        return Center(
-          child: Text("Video Error: $errorMessage", style: const TextStyle(color: Colors.white)),
-        );
-      },
-    );
-    setState(() {});
+    _downloadAndDecrypt();
   }
 
   @override
   void dispose() {
     _videoController?.dispose();
     _chewieController?.dispose();
+
+    if (_tempFile != null && _tempFile!.existsSync()) {
+      _tempFile!.deleteSync();
+    }
+
     super.dispose();
   }
 
+  // =========================================================
+  // DOWNLOAD + DECRYPT
+  // =========================================================
+  Future<void> _downloadAndDecrypt() async {
+    try {
+      final supabase = Supabase.instance.client;
+
+      final fileData = await supabase
+          .from('files')
+          .select('iv')
+          .eq('message_id', widget.messageId)
+          .maybeSingle();
+
+      if (fileData == null) {
+        throw Exception("File metadata not found");
+      }
+
+      final String? ivBase64 = fileData['iv'];
+
+      if (ivBase64 == null || ivBase64.isEmpty) {
+        throw Exception("Missing encryption IV");
+      }
+
+      final nonce = base64Decode(ivBase64);
+
+      final url = "${Env.backendBaseUrl}/api/file/${widget.messageId}";
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode != 200) {
+        throw Exception("Failed to download file");
+      }
+
+      final secretKey = await VaultService().getSecretKey();
+      final algorithm = AesGcm.with256bits();
+
+      final bodyBytes = response.bodyBytes;
+      if (bodyBytes.length < 16) throw Exception("Invalid encrypted file");
+
+      final macBytes = bodyBytes.sublist(bodyBytes.length - 16);
+      final ciphertext = bodyBytes.sublist(0, bodyBytes.length - 16);
+
+      final secretBox = SecretBox(ciphertext, nonce: nonce, mac: Mac(macBytes));
+
+      final decryptedBytes =
+          await algorithm.decrypt(secretBox, secretKey: secretKey);
+
+      if (!mounted) return;
+
+      // =====================================================
+      // TYPE HANDLING
+      // =====================================================
+      if (_isImage(widget.fileName)) {
+        setState(() {
+          _imageBytes = Uint8List.fromList(decryptedBytes);
+          _isLoading = false;
+        });
+      } else if (_isVideo(widget.fileName)) {
+        await _initializeVideo(decryptedBytes);
+      } else {
+        await _openDocument(decryptedBytes);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  // =========================================================
+  // VIDEO PLAYER
+  // =========================================================
+  Future<void> _initializeVideo(List<int> bytes) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      _tempFile = File("${dir.path}/${widget.fileName}");
+      await _tempFile!.writeAsBytes(bytes, flush: true);
+
+      _videoController = VideoPlayerController.file(_tempFile!);
+      await _videoController!.initialize();
+
+      _chewieController = ChewieController(
+        videoPlayerController: _videoController!,
+        autoPlay: true,
+        looping: false,
+        aspectRatio: _videoController!.value.aspectRatio,
+      );
+
+      setState(() => _isLoading = false);
+    } catch (_) {
+      setState(() {
+        _error = "Failed to load video";
+        _isLoading = false;
+      });
+    }
+  }
+
+  // =========================================================
+  // DOCUMENT OPEN (PDF, DOCX, PPTX, etc.)
+  // =========================================================
+  Future<void> _openDocument(List<int> bytes) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      _tempFile = File("${dir.path}/${widget.fileName}");
+      await _tempFile!.writeAsBytes(bytes, flush: true);
+
+      setState(() => _isLoading = false);
+
+      // 🔥 OPEN IN EXTERNAL APP
+      await OpenFilex.open(_tempFile!.path);
+
+      // 🔥 CLOSE THIS SCREEN → no “Preview not available”
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      setState(() {
+        _error = "Failed to open document";
+        _isLoading = false;
+      });
+    }
+  }
+
+  // =========================================================
+  // TYPE CHECKERS
+  // =========================================================
+  bool _isImage(String name) =>
+      RegExp(r'\.(jpg|jpeg|png|gif|webp|bmp|heic)$', caseSensitive: false)
+          .hasMatch(name);
+
+  bool _isVideo(String name) =>
+      RegExp(r'\.(mp4|mov|avi|mkv|webm)$', caseSensitive: false)
+          .hasMatch(name);
+
+  // =========================================================
+  // UI
+  // =========================================================
   @override
   Widget build(BuildContext context) {
-    final url = "${Env.backendBaseUrl}/api/file/${widget.messageId}";
-
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black.withOpacity(0.5),
         iconTheme: const IconThemeData(color: Colors.white),
         elevation: 0,
-        title: Text(widget.fileName, style: const TextStyle(color: Colors.white, fontSize: 16)),
+        title: Text(widget.fileName,
+            style: const TextStyle(color: Colors.white)),
       ),
       body: Center(
-        child: widget.type == 'video'
-            ? _buildVideoPlayer()
-            : _buildImageViewer(url),
+        child: _isLoading
+            ? const CircularProgressIndicator(color: Colors.white)
+            : _error != null
+                ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.broken_image,
+                          color: Colors.white, size: 50),
+                      const SizedBox(height: 10),
+                      Text(_error!,
+                          style: const TextStyle(color: Colors.white70)),
+                    ],
+                  )
+                : _chewieController != null
+                    ? Chewie(controller: _chewieController!)
+                    : _imageBytes != null
+                        ? PhotoView(
+                            imageProvider: MemoryImage(_imageBytes!),
+                            heroAttributes:
+                                PhotoViewHeroAttributes(tag: widget.messageId),
+                          )
+                        : const SizedBox.shrink(),
       ),
     );
-  }
-
-  Widget _buildImageViewer(String url) {
-    return PhotoView(
-      imageProvider: NetworkImage(url),
-      heroAttributes: PhotoViewHeroAttributes(tag: widget.messageId), // 🚀 Smooth Animation
-      loadingBuilder: (context, event) => const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      ),
-      errorBuilder: (context, error, stackTrace) => const Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.broken_image, color: Colors.white, size: 50),
-          SizedBox(height: 10),
-          Text("Could not load image", style: TextStyle(color: Colors.white70)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVideoPlayer() {
-    if (_chewieController != null && _chewieController!.videoPlayerController.value.isInitialized) {
-      return Chewie(controller: _chewieController!);
-    } else {
-      return const CircularProgressIndicator(color: Colors.white);
-    }
   }
 }

@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-
+import 'package:device_info_plus/device_info_plus.dart';
 import '../theme/app_colors.dart';
 
 class SignupPage extends StatefulWidget {
@@ -19,6 +19,7 @@ class _SignupPageState extends State<SignupPage> {
   final TextEditingController password = TextEditingController();
 
   bool loading = false;
+  String? _currentSessionId;
 
   @override
   void dispose() {
@@ -27,6 +28,57 @@ class _SignupPageState extends State<SignupPage> {
     password.dispose();
     super.dispose();
   }
+
+Future<void> _createSession() async {
+  final supabase = Supabase.instance.client;
+  final user = supabase.auth.currentUser;
+  if (user == null) return;
+
+  String deviceName = "Unknown Device";
+
+  try {
+    final deviceInfo = DeviceInfoPlugin();
+
+    if (Platform.isAndroid) {
+      final info = await deviceInfo.androidInfo;
+      deviceName = "${info.brand} ${info.model}";
+    } else if (Platform.isIOS) {
+      final info = await deviceInfo.iosInfo;
+      deviceName = info.utsname.machine ?? "iPhone";
+    } else if (Platform.isWindows) {
+      deviceName = "Windows PC";
+    }
+  } catch (_) {}
+
+  try {
+    /// 1️⃣ Mark old session NOT current
+    await supabase
+        .from('sessions')
+        .update({'is_current': false})
+        .eq('user_id', user.id)
+        .eq('is_current', true);
+
+    /// 2️⃣ Insert new current session
+    final res = await supabase
+        .from('sessions')
+        .insert({
+          'user_id': user.id,
+          'device_name': deviceName,
+          'last_active': DateTime.now().toIso8601String(),
+          'is_current': true,
+        })
+        .select()
+        .single();
+
+    /// 3️⃣ Save current session id locally
+    _currentSessionId = res['id'];
+
+  } catch (e) {
+    debugPrint("Session create error: $e");
+  }
+}
+
+
 
   // ================= EMAIL SIGNUP =================
   Future<void> signup() async {
@@ -61,6 +113,7 @@ class _SignupPageState extends State<SignupPage> {
         'id': user.id,
         'name': nameText,
       });
+      await _createSession();
 
       if (!mounted) return;
 
@@ -74,7 +127,8 @@ class _SignupPageState extends State<SignupPage> {
       if (mounted) setState(() => loading = false);
     }
   }
-
+  
+  
   // ================= GOOGLE SIGNUP (v6) =================
   Future<void> googleSignup() async {
     if (!Platform.isAndroid && !Platform.isIOS) {
@@ -119,6 +173,8 @@ class _SignupPageState extends State<SignupPage> {
         idToken: idToken,
         accessToken: accessToken,
       );
+      
+
 
       final user = res.user;
       if (user != null) {
@@ -127,6 +183,7 @@ class _SignupPageState extends State<SignupPage> {
           'id': user.id,
           'name': user.userMetadata?['full_name'] ?? 'Google User',
         });
+        await _createSession();
       }
 
       if (!mounted) return;
@@ -138,6 +195,8 @@ class _SignupPageState extends State<SignupPage> {
       if (mounted) setState(() => loading = false);
     }
   }
+
+  
 
   // ================= SNACKBAR =================
   void showMsg(String msg) {

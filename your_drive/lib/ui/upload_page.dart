@@ -1,31 +1,13 @@
 import 'dart:io';
 import 'dart:math';
-import 'package:crypto/crypto.dart'; // ✅ Added for SHA-256
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:dio/dio.dart' as dio;
-import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../config/env.dart';
 import '../theme/app_colors.dart';
-
-// 📦 HELPER CLASS FOR QUEUE ITEMS
-class UploadItem {
-  final String id;
-  final File file;
-  double progress;
-  String status; // 'waiting', 'uploading', 'done', 'error', 'exists' // ✅ Added 'exists'
-
-  UploadItem({
-    required this.file,
-    this.progress = 0.0,
-    this.status = 'waiting',
-  }) : id = DateTime.now().microsecondsSinceEpoch.toString() + Random().nextInt(1000).toString();
-}
+import '../services/upload_manager.dart'; // ✅ Import the manager
 
 class UploadPage extends StatefulWidget {
   final String? folderId;
-
   const UploadPage({super.key, this.folderId});
 
   @override
@@ -33,383 +15,299 @@ class UploadPage extends StatefulWidget {
 }
 
 class _UploadPageState extends State<UploadPage> {
-  // 📋 THE QUEUE
-  List<UploadItem> uploadQueue = [];
-  bool isUploadingBatch = false;
+  // ✅ Get the Global Singleton Instance
+  final manager = UploadManager(); 
+  
+  // Local state for initial folder name setup (UI only)
   String folderName = "My Drive";
-
-  final String chunkUploadUrl = "${Env.backendBaseUrl}/api/upload-chunk";
+  
+  // ✅ THE TRICK: Local state for heavy processing
+  bool _isPreparing = false; 
 
   @override
   void initState() {
     super.initState();
-    _fetchFolderName();
-  }
-
-  Future<void> _fetchFolderName() async {
-    if (widget.folderId == null || widget.folderId == 'root' || widget.folderId == '') {
-      setState(() => folderName = "My Drive");
-      return;
+    if (manager.currentFolderName != "My Drive") {
+      folderName = manager.currentFolderName;
     }
-
-    final supabase = Supabase.instance.client;
-    try {
-      final data = await supabase.from('folders').select('name').eq('id', widget.folderId!).single();
-      if (mounted) setState(() => folderName = data['name']);
-    } catch (_) {}
   }
 
-  // 📂 PICK MULTIPLE FILES
   Future<void> pickFiles() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true, 
       withData: false,
     );
-
-    if (result == null) return;
-
-    setState(() {
-      uploadQueue.addAll(
-        result.paths.where((path) => path != null).map((path) => UploadItem(file: File(path!))),
-      );
-    });
-  }
-
-  // 🚀 START BATCH UPLOAD (SEQUENTIAL)
-  Future<void> startBatchUpload() async {
-    if (isUploadingBatch) return;
-
-    setState(() => isUploadingBatch = true);
-
-    for (var item in uploadQueue) {
-      // ✅ SKIP IF FINISHED OR ALREADY EXISTS
-      if (item.status == 'done' || item.status == 'exists') continue; 
-
-      await _uploadSingleItem(item);
-      
-      if (!mounted) break; 
-    }
-
-    if (mounted) {
-      setState(() => isUploadingBatch = false);
-    }
-  }
-
-  // ☁️ UPLOAD SINGLE ITEM (CHUNKED WITH DEDUPLICATION)
-  Future<void> _uploadSingleItem(UploadItem item) async {
-    setState(() => item.status = 'uploading');
-
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
-    if (user == null) return;
-
-    try {
-      // ✅ STEP 1: Generate SHA-256 Hash
-      final String fileHash = await _getFileHash(item.file);
-
-      // ✅ STEP 2: Check for existing file with this hash in Supabase
-      final existingFile = await supabase
-          .from('files')
-          .select()
-          .eq('hash', fileHash)
-          .eq('user_id', user.id)
-          .maybeSingle();
-
-      if (existingFile != null) {
-        // ✅ DUPLICATE FOUND: Strictly ignore upload and database insert
-        if (mounted) {
-          setState(() {
-            item.progress = 1.0;
-            item.status = 'exists'; // Set custom status for UI
-          });
-        }
-        return; // 🔥 EXIT: No upload, no new row.
-      }
-
-      // 🚀 NEW FILE: Proceed with chunked upload
-      final dioClient = dio.Dio();
-      final fileName = item.file.path.split(Platform.pathSeparator).last;
-      final fileSize = await item.file.length();
-      
-      const chunkSize = 5 * 1024 * 1024;
-      final totalChunks = (fileSize / chunkSize).ceil();
-      final uploadId = "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}";
-      final raf = item.file.openSync();
-
-      try {
-        for (int i = 0; i < totalChunks; i++) {
-          final start = i * chunkSize;
-          final end = min(start + chunkSize, fileSize);
-          final length = end - start;
-
-          raf.setPositionSync(start);
-          final chunkBytes = raf.readSync(length);
-
-          int retry = 0;
-          bool chunkSuccess = false;
-          dio.Response? response;
-
-          while (!chunkSuccess && retry < 5) {
-            try {
-              final formData = dio.FormData.fromMap({
-                "file": dio.MultipartFile.fromBytes(chunkBytes, filename: fileName),
-                "chunk_index": i,
-                "total_chunks": totalChunks,
-                "file_name": fileName,
-                "upload_id": uploadId,
-              });
-
-              response = await dioClient.post(
-                chunkUploadUrl,
-                data: formData,
-                options: dio.Options(sendTimeout: const Duration(minutes: 30)),
-              );
-              chunkSuccess = true;
-            } catch (e) {
-              retry++;
-              await Future.delayed(const Duration(seconds: 2));
-            }
-          }
-
-          if (!chunkSuccess) throw Exception("Chunk failed");
-
-          if (mounted) {
-            setState(() {
-              item.progress = (i + 1) / totalChunks;
-            });
-          }
-
-          if (i == totalChunks - 1 && response?.statusCode == 200) {
-            await _saveToSupabase(response?.data ?? {}, fileName, fileSize, fileHash);
-          }
-        }
-
-        if (mounted) setState(() => item.status = 'done');
-
-      } finally {
-        raf.closeSync();
-      }
-
-    } catch (e) {
-      debugPrint("Item failed: $e");
-      if (mounted) setState(() => item.status = 'error');
-    }
-  }
-
-  // ✅ SHA-256 HASH GENERATOR
-  Future<String> _getFileHash(File file) async {
-    final stream = file.openRead();
-    final hash = await sha256.bind(stream).first;
-    return hash.toString();
-  }
-
-  Future<void> _saveToSupabase(Map data, String name, int size, String hash) async {
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
-    if (user == null) return;
-
-    final String? folderIdToSave = 
-        (widget.folderId == 'root' || widget.folderId == '') ? null : widget.folderId;
     
-    final String correctType = _getFileType(name, data['type']);
+    if (result != null) {
+      // ✅ Step 1: Show "Preparing" UI immediately
+      setState(() => _isPreparing = true);
 
-    try {
-      await supabase.from('files').insert({
-        'user_id': user.id,
-        'file_id': data['file_id'], 
-        'message_id': data['message_id'],
-        'name': name,
-        'type': correctType, 
-        'folder_id': folderIdToSave, 
-        'size': size,
-        'hash': hash, 
-      });
-    } catch (_) {}
-  }
+      // ✅ Step 2: Give the UI a moment to render the spinner 
+      // before the CPU gets busy with file objects.
+      await Future.delayed(const Duration(milliseconds: 300));
 
-  String _getFileType(String fileName, String? serverType) {
-    final ext = fileName.split('.').last.toLowerCase();
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'].contains(ext)) return 'image';
-    if (['mp4', 'mov', 'avi', 'mkv'].contains(ext)) return 'video';
-    if (['mp3', 'wav', 'aac'].contains(ext)) return 'music';
-    if (['apk', 'exe', 'dmg'].contains(ext)) return 'app';
-    return serverType ?? 'document';
-  }
+      final files = result.paths
+          .where((p) => p != null)
+          .map((p) => File(p!))
+          .toList();
+      
+      // ✅ Step 3: Add files to the Global Manager (now async)
+      await manager.addFiles(files, widget.folderId, folderName);
 
-  IconData _getIconForFile(String path) {
-    final ext = path.split('.').last.toLowerCase();
-    if (['jpg', 'png', 'jpeg'].contains(ext)) return Icons.image;
-    if (['mp4', 'mov', 'avi'].contains(ext)) return Icons.videocam;
-    if (['pdf'].contains(ext)) return Icons.picture_as_pdf;
-    if (['mp3', 'wav'].contains(ext)) return Icons.music_note;
-    return Icons.insert_drive_file;
+      // ✅ Step 4: Hide "Preparing" UI
+      if (mounted) {
+        setState(() => _isPreparing = false);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: !isUploadingBatch,
-      onPopInvoked: (didPop) {
-        if (!didPop && isUploadingBatch) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("⚠️ Uploading in progress. Please wait.")),
-          );
-        }
-      },
-      child: Scaffold(
-        backgroundColor: AppColors.bg,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          leading: const BackButton(color: Colors.black),
-          title: const Text("Upload Files", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-          centerTitle: true,
-          actions: [
-            if (uploadQueue.isNotEmpty && !isUploadingBatch)
-              IconButton(
-                icon: const Icon(Icons.add_circle_outline, color: AppColors.blue),
-                onPressed: pickFiles,
-              )
-          ],
-        ),
-        body: Stack(
-          children: [
-            Positioned(
-              top: -100, right: -50,
-              child: CircleAvatar(radius: 150, backgroundColor: AppColors.blue.withOpacity(0.15)),
+    return ListenableBuilder(
+      listenable: manager,
+      builder: (context, child) {
+        return PopScope(
+          // Prevent back button while preparing data to avoid crashes
+          canPop: !_isPreparing, 
+          child: Scaffold(
+            backgroundColor: AppColors.bg,
+            appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              leading: const BackButton(color: Colors.black),
+              title: const Text("Upload Files", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+              centerTitle: true,
+              actions: [
+                // Disable add button while preparing
+                if (!manager.isUploading && manager.uploadQueue.isNotEmpty && !_isPreparing)
+                  IconButton(
+                    icon: const Icon(Icons.add_circle_outline, color: AppColors.blue),
+                    onPressed: pickFiles,
+                  )
+              ],
             ),
+            body: Stack(
+              children: [
+                // Background decoration
+                Positioned(
+                  top: -100, right: -50,
+                  child: CircleAvatar(radius: 150, backgroundColor: AppColors.blue.withOpacity(0.15)),
+                ),
 
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.folder_open, size: 16, color: Colors.grey[600]),
-                        const SizedBox(width: 8),
-                        Text("Uploading to: ", style: TextStyle(color: Colors.grey[600], fontSize: 13)),
-                        Text(folderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                // Main Content
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+                  child: Column(
+                    children: [
+                      // 📂 Folder Info Badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.folder_open, size: 16, color: Colors.grey[600]),
+                            const SizedBox(width: 8),
+                            Text("Uploading to: ", style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+                            Text(manager.currentFolderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // 📋 Empty State or List
+                      if (manager.uploadQueue.isEmpty && !_isPreparing)
+                        Expanded(
+                          child: Center(
+                            child: GestureDetector(
+                              onTap: pickFiles,
+                              child: Container(
+                                height: 220,
+                                width: double.infinity,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(24),
+                                  border: Border.all(color: AppColors.blue.withOpacity(0.3), width: 2),
+                                  boxShadow: [BoxShadow(color: AppColors.blue.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, 10))],
+                                ),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 40,
+                                      backgroundColor: AppColors.blue.withOpacity(0.1),
+                                      child: const Icon(Icons.cloud_upload_rounded, size: 40, color: AppColors.blue),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    const Text("Tap to select files", 
+                                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text("Select multiple images, videos, or docs", style: TextStyle(fontSize: 14, color: Colors.grey[500])),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                      else if (!_isPreparing)
+                        Expanded(
+                          child: ListView.separated(
+                            itemCount: manager.uploadQueue.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 12),
+                            itemBuilder: (context, index) {
+                              final item = manager.uploadQueue[index];
+                              return _buildUploadTile(item);
+                            },
+                          ),
+                        )
+                      else 
+                        const Spacer(), // Keeps layout consistent during preparation
+
+                      // 🚀 Action Button
+                      if (manager.uploadQueue.isNotEmpty && !_isPreparing) ...[
+                        const SizedBox(height: 16),
+                        (() {
+                          final allDone = manager.uploadQueue.every((item) => 
+                            item.status == 'done' || item.status == 'exists' || item.status == 'cancelled'
+                          );
+                          
+                          return SizedBox(
+                            width: double.infinity,
+                            height: 56,
+                            child: ElevatedButton(
+                              onPressed: manager.isUploading 
+                                  ? () => Navigator.pop(context) 
+                                  : (allDone 
+                                      ? () {
+                                          manager.clearCompleted();
+                                          Navigator.pop(context);
+                                        } 
+                                      : manager.startBatchUpload),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: allDone ? Colors.green : AppColors.blue,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              ),
+                              child: manager.isUploading 
+                                  ? const Text("Uploading...", style: TextStyle(fontWeight: FontWeight.bold))
+                                  : Text(
+                                      allDone 
+                                        ? "Done" 
+                                        : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error').length} Files",
+                                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)
+                                    ),
+                            ),
+                          );
+                        }()),
                       ],
+                    ],
+                  ),
+                ),
+
+                // ✅ THE PREPARING OVERLAY (Shows on top of everything)
+                if (_isPreparing)
+                  Container(
+                    width: double.infinity,
+                    height: double.infinity,
+                    color: Colors.black.withOpacity(0.05), // Subtle dimming
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 20, offset: const Offset(0, 10))
+                          ]
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(color: AppColors.blue, strokeWidth: 3),
+                            const SizedBox(height: 20),
+                            const Text(
+                              "Preparing your data...",
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87),
+                            ),
+                            const SizedBox(height: 8),
+                            // Show the file counter from the manager
+                            Text(
+                              "Processing: ${manager.filesProcessed} of ${manager.totalFilesToProcess}",
+                              style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 20),
-
-                  if (uploadQueue.isEmpty)
-                    Expanded(
-                      child: Center(
-                        child: GestureDetector(
-                          onTap: pickFiles,
-                          child: Container(
-                            height: 220,
-                            width: double.infinity,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(24),
-                              border: Border.all(color: AppColors.blue.withOpacity(0.3), width: 2),
-                              boxShadow: [BoxShadow(color: AppColors.blue.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, 10))],
-                            ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                CircleAvatar(
-                                  radius: 40,
-                                  backgroundColor: AppColors.blue.withOpacity(0.1),
-                                  child: const Icon(Icons.cloud_upload_rounded, size: 40, color: AppColors.blue),
-                                ),
-                                const SizedBox(height: 16),
-                                const Text("Tap to select files", 
-                                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)
-                                ),
-                                const SizedBox(height: 4),
-                                Text("Select multiple images, videos, or docs", style: TextStyle(fontSize: 14, color: Colors.grey[500])),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    )
-                  else 
-                    Expanded(
-                      child: ListView.separated(
-                        itemCount: uploadQueue.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) {
-                          final item = uploadQueue[index];
-                          return _buildUploadTile(item);
-                        },
-                      ),
-                    ),
-
-                  if (uploadQueue.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    (() {
-                      // ✅ ACCOUNT FOR 'EXISTS' STATUS IN DONE LOGIC
-                      final allDone = uploadQueue.every((item) => item.status == 'done' || item.status == 'exists');
-                      
-                      return SizedBox(
-                        width: double.infinity,
-                        height: 56,
-                        child: ElevatedButton(
-                          onPressed: isUploadingBatch 
-                              ? null 
-                              : (allDone ? () => Navigator.pop(context, true) : startBatchUpload),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: allDone ? Colors.green : AppColors.blue,
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                          ),
-                          child: isUploadingBatch 
-                              ? const Text("Processing Queue...", style: TextStyle(fontWeight: FontWeight.bold))
-                              : Text(
-                                  allDone 
-                                    ? "Done" 
-                                    : "Upload ${uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error').length} Files",
-                                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)
-                                ),
-                        ),
-                      );
-                    }()),
-                  ],
-                ],
-              ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildUploadTile(UploadItem item) {
     Color statusColor = Colors.grey;
-    IconData statusIcon = Icons.circle_outlined;
-    String statusText = "Waiting...";
+IconData statusIcon = Icons.circle_outlined;
+String statusText = "Waiting...";
 
-    if (item.status == 'uploading') {
-      statusColor = AppColors.blue;
-      statusIcon = Icons.upload;
-      statusText = "Uploading...";
-    } else if (item.status == 'done') {
-      statusColor = Colors.green;
-      statusIcon = Icons.check_circle;
-      statusText = "Completed";
-    } else if (item.status == 'exists') {
-      // ✅ PROFESSIONAL DUPLICATE STYLE
-      statusColor = Colors.orange; 
-      statusIcon = Icons.cloud_done_outlined;
-      statusText = "Already exists in cloud";
-    } else if (item.status == 'error') {
-      statusColor = Colors.red;
-      statusIcon = Icons.error_outline;
-      statusText = "Failed";
-    }
+switch (item.status) {
+  case 'preparing':
+    statusColor = Colors.blueGrey;
+    statusIcon = Icons.hourglass_bottom;
+    statusText = "Preparing...";
+    break;
+
+  case 'initializing':
+    statusColor = Colors.indigo;
+    statusIcon = Icons.settings;
+    statusText = "Initializing...";
+    break;
+
+  case 'uploading':
+    statusColor = AppColors.blue;
+    statusIcon = Icons.upload;
+    statusText = "Uploading...";
+    break;
+
+  case 'finalizing':
+    statusColor = Colors.deepPurple;
+    statusIcon = Icons.cloud_done;
+    statusText = "Finalizing...";
+    break;
+
+  case 'done':
+    statusColor = Colors.green;
+    statusIcon = Icons.check_circle;
+    statusText = "Completed";
+    break;
+
+  case 'exists':
+    statusColor = Colors.orange;
+    statusIcon = Icons.cloud_done_outlined;
+    statusText = "Already exists in cloud";
+    break;
+
+  case 'error':
+    statusColor = Colors.red;
+    statusIcon = Icons.error_outline;
+    statusText = "Failed";
+    break;
+
+  case 'cancelled':
+    statusColor = Colors.redAccent;
+    statusIcon = Icons.block;
+    statusText = "Cancelled";
+    break;
+}
+
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -431,7 +329,6 @@ class _UploadPageState extends State<UploadPage> {
             child: Icon(_getIconForFile(item.file.path), color: AppColors.blue, size: 24),
           ),
           const SizedBox(width: 12),
-          
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -460,22 +357,36 @@ class _UploadPageState extends State<UploadPage> {
               ],
             ),
           ),
-          
           const SizedBox(width: 12),
-          
-          if (item.status == 'waiting' && !isUploadingBatch)
+          if (item.status == 'uploading')
             IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              icon: const Icon(Icons.cancel, size: 22, color: Colors.redAccent),
+              onPressed: () => manager.cancelUpload(item),
+            )
+          else if (item.status == 'waiting' && !manager.isUploading)
+            IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
               icon: const Icon(Icons.close, size: 20, color: Colors.grey),
-              onPressed: () {
-                setState(() {
-                  uploadQueue.remove(item);
-                });
-              },
+              onPressed: () => manager.removeFile(item),
             )
           else
             Icon(statusIcon, color: statusColor, size: 22),
         ],
       ),
     );
+  }
+
+  IconData _getIconForFile(String path) {
+    final ext = path.split('.').last.toLowerCase();
+    if (['jpg', 'png', 'jpeg', 'webp', 'heic'].contains(ext)) return Icons.image;
+    if (['mp4', 'mov', 'avi', 'mkv'].contains(ext)) return Icons.videocam;
+    if (['pdf'].contains(ext)) return Icons.picture_as_pdf; 
+    if (['mp3', 'wav', 'aac'].contains(ext)) return Icons.music_note;
+    if (['doc', 'docx'].contains(ext)) return Icons.description;
+    if (['xls', 'xlsx'].contains(ext)) return Icons.table_chart;
+    return Icons.insert_drive_file;
   }
 }

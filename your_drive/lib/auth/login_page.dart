@@ -3,12 +3,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:shared_preferences/shared_preferences.dart'; // ✅ Added for Biometric settings
-
+import 'package:shared_preferences/shared_preferences.dart'; 
+// ADD THIS IMPORT
+import 'package:device_info_plus/device_info_plus.dart';
 import '../theme/app_colors.dart';
-import '../ui/dashboard_page.dart';
+import '../ui/dashboard_page.dart'; 
 import '../auth/signup_page.dart';
-import '../services/biometric_service.dart'; // ✅ Added for Auto-Unlock
+import '../services/biometric_service.dart'; 
+import '../pages/vault_login_page.dart'; // ✅ IMPORT VAULT PAGE
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -22,11 +24,12 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController passwordController = TextEditingController();
 
   bool loading = false;
+  String? _currentSessionId;
 
   @override
   void initState() {
     super.initState();
-    _checkBiometricAuth(); // ⚡ Check for Fingerprint on startup
+    _checkBiometricAuth(); 
   }
 
   @override
@@ -41,19 +44,71 @@ class _LoginPageState extends State<LoginPage> {
     final prefs = await SharedPreferences.getInstance();
     final isEnabled = prefs.getBool('biometric_enabled') ?? false;
 
-    if (isEnabled) {
-      // 🖐️ Prompt for fingerprint immediately
+    // We only auto-login if there is also a Supabase session
+    final session = Supabase.instance.client.auth.currentSession;
+
+    if (isEnabled && session != null) {
       bool authenticated = await BiometricService.authenticate();
       
       if (authenticated && mounted) {
-        // ✅ Success! Go to Dashboard
+        // ✅ GO TO VAULT (User needs to enter PIN to decrypt files)
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const DashboardPage()),
+          MaterialPageRoute(builder: (_) => const VaultLoginPage()),
         );
       }
     }
   }
+
+Future<void> _createSession() async {
+  final supabase = Supabase.instance.client;
+  final user = supabase.auth.currentUser;
+  if (user == null) return;
+
+  String deviceName = "Unknown Device";
+
+  try {
+    final deviceInfo = DeviceInfoPlugin();
+
+    if (Platform.isAndroid) {
+      final info = await deviceInfo.androidInfo;
+      deviceName = "${info.brand} ${info.model}";
+    } else if (Platform.isIOS) {
+      final info = await deviceInfo.iosInfo;
+      deviceName = info.utsname.machine ?? "iPhone";
+    } else if (Platform.isWindows) {
+      deviceName = "Windows PC";
+    }
+  } catch (_) {}
+
+  try {
+    /// 1️⃣ Mark old session NOT current
+    await supabase
+        .from('sessions')
+        .update({'is_current': false})
+        .eq('user_id', user.id)
+        .eq('is_current', true);
+
+    /// 2️⃣ Insert new current session
+    final res = await supabase
+        .from('sessions')
+        .insert({
+          'user_id': user.id,
+          'device_name': deviceName,
+          'last_active': DateTime.now().toIso8601String(),
+          'is_current': true,
+        })
+        .select()
+        .single();
+
+    /// 3️⃣ Save current session id locally
+    _currentSessionId = res['id'];
+
+  } catch (e) {
+    debugPrint("Session create error: $e");
+  }
+}
+
 
   // ================= EMAIL LOGIN =================
   Future<void> login() async {
@@ -71,15 +126,20 @@ class _LoginPageState extends State<LoginPage> {
       final supabase = Supabase.instance.client;
 
       await supabase.auth.signInWithPassword(
-        email: email,
-        password: password,
-      );
+  email: email,
+  password: password,
+);
+
+// ✅ create session
+await _createSession();
+
 
       if (!mounted) return;
 
+      // ✅ GO TO VAULT (Security Gate)
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const DashboardPage()),
+        MaterialPageRoute(builder: (_) => const VaultLoginPage()),
       );
     } on AuthException catch (e) {
       showMsg(e.message);
@@ -109,7 +169,7 @@ class _LoginPageState extends State<LoginPage> {
         scopes: ['email', 'profile'],
       );
 
-      // 🛑 FIX: Force account selection every time
+      // Force account selection every time
       await googleSignIn.signOut(); 
 
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
@@ -137,11 +197,14 @@ class _LoginPageState extends State<LoginPage> {
         accessToken: accessToken,
       );
 
+      await _createSession();
+
       if (!mounted) return;
 
+      // ✅ GO TO VAULT (Security Gate)
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const DashboardPage()),
+        MaterialPageRoute(builder: (_) => const VaultLoginPage()),
       );
     } catch (e) {
       showMsg("Google Sign in failed: $e");

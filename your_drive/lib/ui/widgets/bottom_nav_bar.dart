@@ -8,7 +8,10 @@ class BottomNavBar extends StatelessWidget {
   final VoidCallback onFiles;
   final VoidCallback onProfile;
   final VoidCallback onNotifications;
-  final int unreadCount; 
+  final int unreadCount;
+
+  /// 👇 NEW: active tab index for highlight
+  final int selectedIndex;
 
   const BottomNavBar({
     super.key,
@@ -17,36 +20,41 @@ class BottomNavBar extends StatelessWidget {
     required this.onFiles,
     required this.onProfile,
     required this.onNotifications,
-    required this.unreadCount, 
+    required this.unreadCount,
+    this.selectedIndex = 0,
   });
 
-  /// ➕ SHOW ADD OPTIONS (UPLOAD / CREATE FOLDER)
+  // ============================================================
+  // ➕ ADD OPTIONS SHEET
+  // ============================================================
   void _showAddOptions(BuildContext context) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (_) => ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         child: Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(0.95),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(
-                leading: const Icon(Icons.upload_file, color: Colors.blue),
-                title: const Text("Upload file"),
+              _sheetItem(
+                icon: Icons.upload_file,
+                color: Colors.blue,
+                title: "Upload file",
                 onTap: () {
                   Navigator.pop(context);
                   showUploadLocationPicker(context);
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.create_new_folder, color: Colors.green),
-                title: const Text("Create folder"),
+              _sheetItem(
+                icon: Icons.create_new_folder,
+                color: Colors.green,
+                title: "Create folder",
                 onTap: () {
                   Navigator.pop(context);
                   onCreateFolder();
@@ -59,81 +67,136 @@ class BottomNavBar extends StatelessWidget {
     );
   }
 
+  Widget _sheetItem({
+    required IconData icon,
+    required Color color,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(title),
+      onTap: onTap,
+    );
+  }
+
+  // ============================================================
+  // 🔹 NAV ICON BUILDER
+  // ============================================================
+  Widget _navIcon({
+    required IconData icon,
+    required VoidCallback onTap,
+    required bool active,
+    Widget? badge,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: active ? Colors.blue.withOpacity(0.12) : Colors.transparent,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(
+              icon,
+              size: 24,
+              color: active ? Colors.blue : Colors.black87,
+            ),
+          ),
+          if (badge != null) badge,
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // UI
+  // ============================================================
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(30),
+          borderRadius: BorderRadius.circular(32),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
             child: Container(
-              height: 70,
+              height: 72,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.35),
-                borderRadius: BorderRadius.circular(30),
-                border: Border.all(color: Colors.white30),
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.white.withOpacity(0.65),
+                    Colors.white.withOpacity(0.35),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(32),
+                border: Border.all(color: Colors.white.withOpacity(0.4)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
+                  )
+                ],
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.home),
-                    onPressed: onHome,
+                  _navIcon(
+                    icon: Icons.home_rounded,
+                    onTap: onHome,
+                    active: selectedIndex == 0,
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.folder),
-                    onPressed: onFiles,
+                  _navIcon(
+                    icon: Icons.folder_rounded,
+                    onTap: onFiles,
+                    active: selectedIndex == 1,
                   ),
 
-                  /// ➕ ADD BUTTON
+                  // ================= FAB =================
                   GestureDetector(
                     onTap: () => _showAddOptions(context),
                     child: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: const BoxDecoration(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.blue,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF4F8CFF), Color(0xFF6A5BFF)],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF4F8CFF).withOpacity(0.4),
+                            blurRadius: 20,
+                            offset: const Offset(0, 8),
+                          )
+                        ],
                       ),
-                      child: const Icon(
-                        Icons.add,
-                        color: Colors.white,
-                        size: 28,
-                      ),
+                      child: const Icon(Icons.add, color: Colors.white, size: 30),
                     ),
                   ),
 
-                  // 🔔 FIXED NOTIFICATION BUTTON
-                  // We use GestureDetector to make the entire Stack clickable
-                  GestureDetector(
-                    onTap: onNotifications, // ✅ Triggers even if you tap the badge
-                    behavior: HitTestBehavior.opaque, // ✅ Makes transparent areas clickable
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        // The Bell Icon
-                        IconButton(
-                          icon: const Icon(Icons.notifications),
-                          onPressed: onNotifications, // Standard button trigger
-                        ),
-                        
-                        // The Red Badge
-                        if (unreadCount > 0)
-                          Positioned(
-                            right: 8,
-                            top: 8,
+                  // ================= NOTIFICATION =================
+                  _navIcon(
+                    icon: Icons.notifications_rounded,
+                    onTap: onNotifications,
+                    active: selectedIndex == 2,
+                    badge: unreadCount > 0
+                        ? Positioned(
+                            right: 6,
+                            top: 6,
                             child: Container(
-                              padding: const EdgeInsets.all(2),
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                               decoration: BoxDecoration(
                                 color: Colors.red,
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(color: Colors.white, width: 1.5),
-                              ),
-                              constraints: const BoxConstraints(
-                                minWidth: 18,
-                                minHeight: 18,
                               ),
                               child: Text(
                                 unreadCount > 9 ? '9+' : unreadCount.toString(),
@@ -142,17 +205,16 @@ class BottomNavBar extends StatelessWidget {
                                   fontSize: 10,
                                   fontWeight: FontWeight.bold,
                                 ),
-                                textAlign: TextAlign.center,
                               ),
                             ),
-                          ),
-                      ],
-                    ),
+                          )
+                        : null,
                   ),
 
-                  IconButton(
-                    icon: const Icon(Icons.person),
-                    onPressed: onProfile,
+                  _navIcon(
+                    icon: Icons.person_rounded,
+                    onTap: onProfile,
+                    active: selectedIndex == 3,
                   ),
                 ],
               ),
