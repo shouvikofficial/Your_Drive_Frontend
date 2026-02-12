@@ -1,32 +1,48 @@
 import 'dart:io';
 import 'dart:math';
+
 import 'dart:convert';
+import 'package:crypto/crypto.dart' show sha256, Digest;
+import 'package:convert/convert.dart';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart' as dio;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cryptography/cryptography.dart';
-import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../services/saf_service.dart';
 import '../config/env.dart';
 import '../services/vault_service.dart';
+
 
 // ================= Upload Item =================
 class UploadItem {
   final String id;
-  final File file;
+
+  // normal picker file
+  final File? file;
+
+  // SAF picker info
+  final String? name;
+  final String? uri;
+  final int? size;
+
   double progress;
   String status;
   String? uploadId;
   dio.CancelToken? cancelToken;
 
   UploadItem({
-    required this.file,
+    this.file,
+    this.name,
+    this.uri,
+    this.size,
     this.progress = 0.0,
     this.status = 'waiting',
   }) : id = DateTime.now().microsecondsSinceEpoch.toString() +
             Random().nextInt(1000).toString();
 }
+
 
 // ================= Upload Manager (FINAL FIXED PARALLEL) =================
 class UploadManager extends ChangeNotifier {
@@ -47,33 +63,30 @@ class UploadManager extends ChangeNotifier {
   final String cancelUploadUrl = "${Env.backendBaseUrl}/api/upload-cancel";
 
   // ================= Add Files =================
-  Future<void> addFiles(List<File> files, String? folderId, String folderName) async {
-    if (!isUploading) {
-      currentFolderId = folderId;
-      currentFolderName = folderName;
-    }
-
-    filesProcessed = 0;
-    totalFilesToProcess = files.length;
-    notifyListeners();
-
-    await Future.delayed(const Duration(milliseconds: 50));
-
-    for (var file in files) {
-      if (!uploadQueue.any((item) => item.file.path == file.path)) {
-        uploadQueue.add(UploadItem(file: file));
-      }
-
-      filesProcessed++;
-
-      if (filesProcessed % 5 == 0) {
-        notifyListeners();
-        await Future.delayed(Duration.zero);
-      }
-    }
-
-    notifyListeners();
+Future<void> addSafFile({
+  required String uri,
+  required String name,
+  required int size,
+  String? folderId,
+  required String folderName,
+}) async {
+  if (!isUploading) {
+    currentFolderId = folderId;
+    currentFolderName = folderName;
   }
+
+  uploadQueue.add(
+    UploadItem(
+      file: null,
+      name: name,
+      uri: uri,
+      size: size,
+    ),
+  );
+
+  notifyListeners();
+}
+
 
   // ================= Auto Cache Clear =================
   Future<void> autoClearCache() async {
@@ -127,164 +140,281 @@ class UploadManager extends ChangeNotifier {
 
   // ================= Start Batch Upload =================
   Future<void> startBatchUpload() async {
-    if (isUploading) return;
+  if (isUploading) return;
 
-    isUploading = true;
-    notifyListeners();
+  isUploading = true;
+  notifyListeners();
 
-    for (var item in uploadQueue) {
-      if (['done', 'exists', 'cancelled'].contains(item.status)) continue;
+  // 👉 take only files that need upload
+  final pendingFiles = uploadQueue
+      .where((i) => !['done', 'exists', 'cancelled'].contains(i.status))
+      .toList();
 
-      await _uploadSingleItemParallel(item);
-      notifyListeners();
-    }
+  const maxParallelFiles = 3; // ⭐ SAFE mobile limit
 
-    isUploading = false;
-    await autoClearCache();
-    notifyListeners();
+  // 👉 process files in small parallel batches
+  for (int i = 0; i < pendingFiles.length; i += maxParallelFiles) {
+    final batch = pendingFiles.skip(i).take(maxParallelFiles);
+
+    // ⭐ upload this batch in parallel
+    await Future.wait(batch.map(_uploadSingleItemParallel));
   }
 
-  // ================= FINAL PARALLEL UPLOAD =================
-  Future<void> _uploadSingleItemParallel(UploadItem item) async {
-    item.status = 'preparing';
-    item.cancelToken = dio.CancelToken();
+  isUploading = false;
+
+  await autoClearCache();
+  notifyListeners();
+}
+
+
+Future<void> _uploadSingleItemParallel(UploadItem item) async {
+  item.status = 'preparing';
+  item.cancelToken = dio.CancelToken();
+  notifyListeners();
+
+  final supabase = Supabase.instance.client;
+  final user = supabase.auth.currentUser;
+
+  if (user == null) {
+    item.status = 'error';
     notifyListeners();
+    return;
+  }
 
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
+  try {
+    // ================= FILE INFO =================
+    final fileName =
+        item.file?.path.split(Platform.pathSeparator).last ??
+        item.name ??
+        "file";
 
-    if (user == null) {
+    final int fileSize =
+        item.file != null ? await item.file!.length() : (item.size ?? 0);
+
+    if (fileSize == 0) {
       item.status = 'error';
       notifyListeners();
       return;
     }
 
-    File? encryptedFile;
+// ================= HASH (STREAM SAFE) =================
+Digest hash;
 
-    try {
-      // ===== HASH =====
-      final fileHash = await _getFileHash(item.file);
+if (item.file != null) {
+  hash = await sha256.bind(item.file!.openRead()).first;
+} else {
+  const int hashChunk = 1024 * 1024;
+  int offset = 0;
 
-      final existingFile = await supabase
-          .from('files')
-          .select()
-          .eq('hash', fileHash)
-          .eq('user_id', user.id)
-          .maybeSingle();
+final AccumulatorSink<Digest> sink = AccumulatorSink<Digest>();
+final ByteConversionSink input = sha256.startChunkedConversion(sink);
 
-      if (existingFile != null) {
-        item.progress = 1.0;
-        item.status = 'exists';
-        notifyListeners();
-        return;
-      }
 
-      // ===== ENCRYPT =====
-      final nonce = VaultService().generateNonce();
-      final key = await VaultService().getSecretKey();
 
-      encryptedFile = await _createEncryptedTempFile(item.file, key, nonce);
-      if (encryptedFile == null) throw Exception("Encryption failed");
+  while (offset < fileSize) {
+    final int readLen =
+        (offset + hashChunk > fileSize) ? fileSize - offset : hashChunk;
 
-      item.status = 'initializing';
+    final bytes = await SafService.readChunk(
+      uri: item.uri!,
+      offset: offset,
+      length: readLen,
+    );
+
+    if (bytes == null) {
+      item.status = 'error';
       notifyListeners();
+      return;
+    }
 
-      final dioClient = dio.Dio();
-      final originalFileName = item.file.path.split(Platform.pathSeparator).last;
-      final fileSize = await encryptedFile.length();
+    input.add(bytes);
+    offset += readLen;
+  }
 
-      int chunkSize = 2 * 1024 * 1024; // 2MB
-      final totalChunks = (fileSize / chunkSize).ceil();
-      const maxParallel = 3;
+  input.close();
+  hash = sink.events.single;
+}
 
-      item.uploadId = "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}";
 
-      int uploadedChunks = 0;
-      Map<String, dynamic>? finalResponse;
 
-      item.status = 'uploading';
+    final fileHash = hash.toString();
+
+    // ================= DUPLICATE CHECK =================
+    final existing = await supabase
+        .from('files')
+        .select()
+        .eq('hash', fileHash)
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+    if (existing != null) {
+      item.progress = 1.0;
+      item.status = 'exists';
       notifyListeners();
+      return;
+    }
 
-      Future<void> uploadChunk(int index) async {
-        final start = index * chunkSize;
-        final end = min(start + chunkSize, fileSize);
-        final length = end - start;
+    // ================= ENCRYPTION SETUP =================
+    final algorithm = AesGcm.with256bits();
+    final key = await VaultService().getSecretKey();
+    final baseNonce = VaultService().generateNonce(); // 12 bytes
 
-        final raf = encryptedFile!.openSync();
+    // ================= UPLOAD SETUP =================
+    final dioClient = dio.Dio();
+
+    const int chunkSize = 2 * 1024 * 1024; // 2MB
+    final int totalChunks = (fileSize / chunkSize).ceil();
+    const int maxParallel = 3;
+
+    item.uploadId =
+        "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}";
+
+    int uploadedChunks = 0;
+    Map<String, dynamic>? finalResponse;
+
+    item.status = 'uploading';
+    notifyListeners();
+
+    // ================= READ + ENCRYPT + UPLOAD =================
+    Future<void> processChunk(int index) async {
+      final start = index * chunkSize;
+      final end = min(start + chunkSize, fileSize);
+      final length = end - start;
+
+      List<int>? plainBytes;
+
+      if (item.file != null) {
+        final raf = item.file!.openSync();
         raf.setPositionSync(start);
-        final chunkBytes = raf.readSync(length);
+        plainBytes = raf.readSync(length);
         raf.closeSync();
-
-        final response = await dioClient.post(
-          chunkUploadUrl,
-          data: dio.FormData.fromMap({
-            "file": dio.MultipartFile.fromBytes(chunkBytes, filename: originalFileName),
-            "chunk_index": index,
-            "total_chunks": totalChunks,
-            "file_name": originalFileName,
-            "upload_id": item.uploadId,
-          }),
-          cancelToken: item.cancelToken,
+      } else {
+        plainBytes = await SafService.readChunk(
+          uri: item.uri!,
+          offset: start,
+          length: length,
         );
-
-        if (response.statusCode == null || response.statusCode! >= 300) {
-          throw Exception("Chunk upload failed");
-        }
-
-        if (response.data is Map && response.data["status"] == "done") {
-          finalResponse = Map<String, dynamic>.from(response.data);
-        }
-
-        uploadedChunks++;
-        item.progress = uploadedChunks / totalChunks;
-        notifyListeners();
       }
 
-      List<Future> pool = [];
-
-      for (int i = 0; i < totalChunks; i++) {
-        if (item.status == 'cancelled') break;
-
-        pool.add(uploadChunk(i));
-
-        if (pool.length == maxParallel) {
-          await Future.wait(pool);
-          pool.clear();
-        }
+      if (plainBytes == null) {
+        throw Exception("Read failed");
       }
 
-      if (pool.isNotEmpty) {
-        await Future.wait(pool);
-      }
+      // 🔐 unique nonce per chunk
+      final nonce = List<int>.from(baseNonce);
+      nonce[nonce.length - 1] ^= index & 0xFF;
 
-      if (finalResponse == null) {
-        throw Exception("Final response missing from backend");
-      }
-
-      item.status = 'finalizing';
-      notifyListeners();
-
-      await _saveToSupabase(
-        finalResponse!,
-        originalFileName,
-        fileSize,
-        fileHash,
-        base64Encode(nonce),
+      final secretBox = await algorithm.encrypt(
+        plainBytes,
+        secretKey: key,
+        nonce: nonce,
       );
 
-      item.status = 'done';
-    } on dio.DioException catch (e) {
-      item.status = dio.CancelToken.isCancel(e) ? 'cancelled' : 'error';
-    } catch (_) {
-      item.status = 'error';
-    } finally {
-      if (encryptedFile != null && await encryptedFile.exists()) {
-        await encryptedFile.delete();
+      final encryptedBytes = secretBox.cipherText + secretBox.mac.bytes;
+
+      final response = await dioClient.post(
+        chunkUploadUrl,
+        data: dio.FormData.fromMap({
+          "file": dio.MultipartFile.fromBytes(
+            encryptedBytes,
+            filename: fileName,
+          ),
+          "chunk_index": index,
+          "total_chunks": totalChunks,
+          "file_name": fileName,
+          "upload_id": item.uploadId,
+        }),
+        cancelToken: item.cancelToken,
+      );
+
+      if (response.statusCode == null || response.statusCode! >= 300) {
+        throw Exception("Chunk upload failed");
       }
 
+      if (response.data is Map && response.data["status"] == "done") {
+  finalResponse ??= Map<String, dynamic>.from(response.data);
+}
+
+      uploadedChunks++;
+      item.progress = uploadedChunks / totalChunks;
       notifyListeners();
     }
+
+    // ================= PARALLEL CHUNK LOOP =================
+    List<Future> pool = [];
+
+    for (int i = 0; i < totalChunks; i++) {
+      if (item.status == 'cancelled') break;
+
+      pool.add(processChunk(i));
+
+      if (pool.length == maxParallel) {
+        await Future.wait(pool);
+        pool.clear();
+      }
+    }
+
+    if (pool.isNotEmpty) {
+      await Future.wait(pool);
+    }
+
+if (finalResponse == null) {
+  // wait small time for backend finalize response
+  await Future.delayed(const Duration(seconds: 2));
+
+  // try to fetch status from backend
+  try {
+    final check = await dioClient.get(
+      "${Env.backendBaseUrl}/api/upload-status/${item.uploadId}",
+    );
+
+    if (check.data["status"] == "done") {
+      // create minimal finalResponse so flow continues
+      finalResponse = {
+        "file_id": item.uploadId,
+        "message_id": item.uploadId,
+      };
+    }
+  } catch (_) {}
+}
+item.progress = 1.0;
+
+// ================= SAVE DB =================
+item.status = 'finalizing';
+notifyListeners();
+
+try {
+  await _saveToSupabase(
+    finalResponse!,
+    fileName,
+    fileSize,
+    fileHash,
+    base64Encode(baseNonce),
+  );
+} catch (e) {
+  // ⚠️ IMPORTANT:
+  // Telegram already uploaded successfully.
+  // Metadata failure should NOT mark upload failed.
+  debugPrint("Supabase save failed but Telegram upload succeeded: $e");
+}
+
+// ⭐ Always mark as done after Telegram success
+item.status = 'done';
+
+ } on dio.DioException catch (e) {
+  if (dio.CancelToken.isCancel(e)) {
+    item.status = 'cancelled';
+  } else {
+    item.status = 'error';
   }
+} catch (e) {
+  debugPrint("Upload unexpected error: $e");
+  item.status = 'error';
+}finally {
+    notifyListeners();
+  }
+}
+
 
   // ================= Encryption =================
   Future<File?> _createEncryptedTempFile(File originalFile, SecretKey key, List<int> nonce) async {

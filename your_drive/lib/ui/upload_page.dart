@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import '../services/saf_service.dart';
 
 import '../theme/app_colors.dart';
 import '../services/upload_manager.dart'; // ✅ Import the manager
@@ -32,34 +33,33 @@ class _UploadPageState extends State<UploadPage> {
     }
   }
 
-  Future<void> pickFiles() async {
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true, 
-      withData: false,
+Future<void> pickFiles() async {
+  // 🔹 Open Android SAF multi-file picker
+  final files = await SafService.pickFiles();
+
+  if (files == null || files.isEmpty) return;
+
+  setState(() => _isPreparing = true);
+
+  await Future.delayed(const Duration(milliseconds: 200));
+
+  // 🔹 Add ALL selected files to upload manager
+  for (final file in files) {
+    await manager.addSafFile(
+      uri: file['uri'],
+      name: file['name'],
+      size: file['size'],
+      folderId: widget.folderId,
+      folderName: folderName,
     );
-    
-    if (result != null) {
-      // ✅ Step 1: Show "Preparing" UI immediately
-      setState(() => _isPreparing = true);
-
-      // ✅ Step 2: Give the UI a moment to render the spinner 
-      // before the CPU gets busy with file objects.
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      final files = result.paths
-          .where((p) => p != null)
-          .map((p) => File(p!))
-          .toList();
-      
-      // ✅ Step 3: Add files to the Global Manager (now async)
-      await manager.addFiles(files, widget.folderId, folderName);
-
-      // ✅ Step 4: Hide "Preparing" UI
-      if (mounted) {
-        setState(() => _isPreparing = false);
-      }
-    }
   }
+
+  if (mounted) {
+    setState(() => _isPreparing = false);
+  }
+}
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -257,6 +257,8 @@ class _UploadPageState extends State<UploadPage> {
     Color statusColor = Colors.grey;
 IconData statusIcon = Icons.circle_outlined;
 String statusText = "Waiting...";
+final pathForIcon =
+      item.file != null ? item.file!.path : (item.name ?? "file");
 
 switch (item.status) {
   case 'preparing':
@@ -326,7 +328,8 @@ switch (item.status) {
               color: AppColors.blue.withOpacity(0.1),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(_getIconForFile(item.file.path), color: AppColors.blue, size: 24),
+            child: Icon(_getIconForFile(pathForIcon), color: AppColors.blue, size: 24),
+
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -334,7 +337,10 @@ switch (item.status) {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  item.file.path.split(Platform.pathSeparator).last,
+                  (item.file != null
+    ? item.file!.path.split(Platform.pathSeparator).last
+    : item.name ?? "file"),
+
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   maxLines: 1, overflow: TextOverflow.ellipsis,
                 ),
