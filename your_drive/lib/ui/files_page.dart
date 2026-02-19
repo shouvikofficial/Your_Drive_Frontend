@@ -174,7 +174,12 @@ class _FilesPageState extends State<FilesPage> {
       final response = await http.get(Uri.parse(url));
       if (response.statusCode != 200) throw Exception("Download failed");
 
-      final decryptedBytes = await _decryptFile(response.bodyBytes, file['iv']);
+      final decryptedBytes = await _decryptFile(
+  response.bodyBytes,
+  file['iv'],
+  file['chunk_size'] ?? 5242880,
+);
+
       final tempDir = await getTemporaryDirectory();
       final tempFile = await File('${tempDir.path}/${file['name']}').create();
       await tempFile.writeAsBytes(decryptedBytes);
@@ -192,7 +197,11 @@ class _FilesPageState extends State<FilesPage> {
     }
   }
 
- Future<List<int>> _decryptFile(List<int> encryptedBytes, String? ivBase64) async {
+Future<List<int>> _decryptFile(
+  List<int> encryptedBytes,
+  String? ivBase64,
+  int chunkSizeFromDb,
+) async {
   if (ivBase64 == null || ivBase64.isEmpty) {
     throw Exception("Missing IV");
   }
@@ -201,28 +210,28 @@ class _FilesPageState extends State<FilesPage> {
   final secretKey = await VaultService().getSecretKey();
   final algorithm = AesGcm.with256bits();
 
-  const chunkSize = 5 * 1024 * 1024 + 16; // encrypted chunk = data + MAC
+  final encryptedChunkSize = chunkSizeFromDb + 16; // + MAC
   int offset = 0;
 
   final output = BytesBuilder();
 
   while (offset < encryptedBytes.length) {
-    final end = (offset + chunkSize > encryptedBytes.length)
+    final end = (offset + encryptedChunkSize > encryptedBytes.length)
         ? encryptedBytes.length
-        : offset + chunkSize;
+        : offset + encryptedChunkSize;
 
     final chunk = encryptedBytes.sublist(offset, end);
 
-    // split MAC
     final macBytes = chunk.sublist(chunk.length - 16);
     final cipherText = chunk.sublist(0, chunk.length - 16);
 
-    // derive nonce same as upload
-    final chunkIndex = offset ~/ chunkSize;
+    final chunkIndex = offset ~/ encryptedChunkSize;
+
     final nonce = Uint8List.fromList(baseNonce);
-    for (int i = 0; i < 4; i++) {
-      nonce[nonce.length - 1 - i] ^= (chunkIndex >> (8 * i)) & 0xff;
-    }
+    nonce[8] = (chunkIndex >> 24) & 0xFF;
+    nonce[9] = (chunkIndex >> 16) & 0xFF;
+    nonce[10] = (chunkIndex >> 8) & 0xFF;
+    nonce[11] = chunkIndex & 0xFF;
 
     final decrypted = await algorithm.decrypt(
       SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
@@ -235,6 +244,7 @@ class _FilesPageState extends State<FilesPage> {
 
   return output.toBytes();
 }
+
 
 
   @override

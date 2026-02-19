@@ -1,18 +1,20 @@
-import 'dart:io'; 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:hive/hive.dart';
+import 'package:path_provider/path_provider.dart';
 
 // ✅ IMPORTS
-import 'config/env.dart'; // 👈 Use Env for clean config
+import 'config/env.dart';
 import 'services/backup_service.dart';
 import 'auth/login_page.dart';
 import 'ui/onboarding_page.dart';
-import 'pages/vault_login_page.dart'; 
+import 'pages/vault_login_page.dart';
 
-// 🔔 1. BACKGROUND NOTIFICATION HANDLER
+// 🔔 BACKGROUND NOTIFICATION HANDLER
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (Platform.isAndroid || Platform.isIOS) {
@@ -24,40 +26,50 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 🔥 2. INIT FIREBASE (Skip on Windows)
+  // ================= HIVE INIT (🔥 IMPORTANT FIX)
+  final dir = await getApplicationDocumentsDirectory();
+  Hive.init(dir.path);
+
+  // open resume upload box
+  await Hive.openBox('uploads');
+  // ================= END HIVE INIT
+
+  // 🔥 FIREBASE INIT (Skip on Windows)
   if (!Platform.isWindows) {
     try {
       await Firebase.initializeApp();
-      
-      // 🔔 4. SETUP NOTIFICATIONS
-      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+      FirebaseMessaging.onBackgroundMessage(
+        _firebaseMessagingBackgroundHandler,
+      );
+
       await setupNotifications();
     } catch (e) {
       print("Firebase Init Error: $e");
     }
   }
 
-  // 🔥 3. INIT SUPABASE (Using Env)
+  // 🔥 SUPABASE INIT
   await Supabase.initialize(
-    url: Env.supabaseUrl, // ✅ Clean
-    anonKey: Env.supabaseAnonKey, // ✅ Clean
+    url: Env.supabaseUrl,
+    anonKey: Env.supabaseAnonKey,
   );
 
-  // ✅ 5. INIT BACKUP SERVICE
+  // ✅ BACKUP SERVICE INIT
   try {
     await BackupService().initBackgroundService();
   } catch (e) {
     print("Backup Service Error: $e");
   }
 
-  // ✅ 6. CHECK ONBOARDING STATUS
+  // ✅ ONBOARDING CHECK
   final prefs = await SharedPreferences.getInstance();
   final bool seenOnboarding = prefs.getBool('seen_onboarding') ?? false;
 
   runApp(MyDriveApp(seenOnboarding: seenOnboarding));
 }
 
-// 🔔 HELPER: REQUEST PERMISSION & GET TOKEN
+// 🔔 NOTIFICATION SETUP
 Future<void> setupNotifications() async {
   if (Platform.isWindows) return;
 
@@ -71,7 +83,7 @@ Future<void> setupNotifications() async {
 
   if (settings.authorizationStatus == AuthorizationStatus.authorized) {
     print('User granted permission');
-    
+
     try {
       String? token = await messaging.getToken();
       print("🔥 FCM Token: $token");
@@ -102,21 +114,18 @@ class MyDriveApp extends StatelessWidget {
       theme: ThemeData(
         brightness: Brightness.light,
         useMaterial3: true,
-        // Make the app look consistent
         scaffoldBackgroundColor: Colors.white,
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.white,
           surfaceTintColor: Colors.transparent,
-        )
+        ),
       ),
       home: seenOnboarding ? const AuthGate() : const OnboardingPage(),
     );
   }
 }
 
-/// ------------------------------------------------------
-/// 🔒 AUTH GATE (Redirects to Vault Login)
-/// ------------------------------------------------------
+/// 🔒 AUTH GATE
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
@@ -128,7 +137,9 @@ class AuthGate extends StatelessWidget {
       stream: supabase.auth.onAuthStateChange,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
         }
 
         final session = supabase.auth.currentSession;
@@ -137,7 +148,6 @@ class AuthGate extends StatelessWidget {
           return const LoginPage();
         }
 
-        // ✅ LOGGED IN -> GO TO VAULT (To Decrypt Keys)
         return const VaultLoginPage();
       },
     );

@@ -4,7 +4,7 @@ class Env {
 
   // 🔥 backend URL switch
   static const String backendBaseUrl = isDev
-      ? "http://127.0.0.1:8000"      // ✅ LOCAL FastAPI
+      ? "http://10.0.2.2:8000"// ✅ LOCAL FastAPI
       : "https://your-drive-backend.onrender.com"; // 🌍 Render
 
   // ⚡ Supabase Configuration (Added these lines)
