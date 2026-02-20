@@ -294,6 +294,7 @@ await _saveToSupabase(
   fileHash,
   base64Encode(baseNonce),
   strategy.chunkSize,
+  1, // ✅ total_chunks = 1 for direct upload
 );
 
 
@@ -389,6 +390,7 @@ if (response.data["status"] == "done") {
     fileHash,
     base64Encode(baseNonce),
     strategy.chunkSize,
+    totalChunks,
   );
 }
 
@@ -437,7 +439,7 @@ if (response.data["status"] == "done") {
 
   // ================= Save to Supabase =================
   Future<void> _saveToSupabase(
-      Map data, String name, int size, String hash, String ivBase64,int chunkSize) async {
+      Map data, String name, int size, String hash, String ivBase64,int chunkSize, int totalChunks,) async {
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
 
@@ -459,6 +461,7 @@ if (response.data["status"] == "done") {
       'hash': hash,
       'iv': ivBase64,
       'chunk_size': chunkSize,
+      'total_chunks': totalChunks,
     });
   }
 

@@ -163,75 +163,94 @@ class _FilesPageState extends State<FilesPage> {
 
   // --- Sharing & Decryption ---
 
-  Future<void> _shareFile(Map<String, dynamic> file) async {
-    try {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Decrypting & Preparing..."),
-        duration: Duration(seconds: 1),
-      ));
+ Future<void> _shareFile(Map<String, dynamic> file) async {
+  try {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Preparing secure file...")),
+    );
 
-      final url = "${Env.backendBaseUrl}/api/file/${file['message_id']}";
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode != 200) throw Exception("Download failed");
+    final supabase = Supabase.instance.client;
 
-      final decryptedBytes = await _decryptFile(
-  response.bodyBytes,
-  file['iv'],
-  file['chunk_size'] ?? 5242880,
-);
+    final fileData = await supabase
+        .from('files')
+        .select('iv, chunk_size, total_chunks')
+        .eq('message_id', file['message_id'])
+        .maybeSingle();
 
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = await File('${tempDir.path}/${file['name']}').create();
-      await tempFile.writeAsBytes(decryptedBytes);
+    if (fileData == null) throw Exception("Metadata missing");
 
-      final box = context.findRenderObject() as RenderBox?;
-      await Share.shareXFiles(
-        [XFile(tempFile.path)],
-        sharePositionOrigin: box!.localToGlobal(Offset.zero) & box.size,
+    final ivBase64 = fileData['iv'];
+    final int chunkSize = fileData['chunk_size'];
+    final int totalChunks = fileData['total_chunks'];
+
+    final url =
+        "${Env.backendBaseUrl}/api/file/${file['message_id']}";
+
+    // 🔥 Step 1: Download FULL encrypted file
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode != 200) {
+      throw Exception("Download failed");
+    }
+
+    final encryptedBytes = response.bodyBytes;
+
+    // 🔥 Step 2: Decrypt properly
+    final decryptedFile = await _decryptFullFile(
+      encryptedBytes,
+      ivBase64,
+      chunkSize,
+      totalChunks,
+      file['name'],
+    );
+
+    final box = context.findRenderObject() as RenderBox?;
+
+    await Share.shareXFiles(
+      [XFile(decryptedFile.path)],
+      sharePositionOrigin:
+          box!.localToGlobal(Offset.zero) & box.size,
+    );
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Share failed"),
+          backgroundColor: Colors.red,
+        ),
       );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text("Decryption failed"), backgroundColor: Colors.red));
-      }
     }
   }
+}
 
-Future<List<int>> _decryptFile(
+Future<File> _decryptFullFile(
   List<int> encryptedBytes,
-  String? ivBase64,
-  int chunkSizeFromDb,
+  String ivBase64,
+  int chunkSize,
+  int totalChunks,
+  String fileName,
 ) async {
-  if (ivBase64 == null || ivBase64.isEmpty) {
-    throw Exception("Missing IV");
-  }
-
   final baseNonce = base64Decode(ivBase64);
   final secretKey = await VaultService().getSecretKey();
   final algorithm = AesGcm.with256bits();
 
-  final encryptedChunkSize = chunkSizeFromDb + 16; // + MAC
+  final output = BytesBuilder();
   int offset = 0;
 
-  final output = BytesBuilder();
-
-  while (offset < encryptedBytes.length) {
-    final end = (offset + encryptedChunkSize > encryptedBytes.length)
+  for (int i = 0; i < totalChunks; i++) {
+    final int end = (i == totalChunks - 1)
         ? encryptedBytes.length
-        : offset + encryptedChunkSize;
+        : offset + chunkSize + 16;
 
     final chunk = encryptedBytes.sublist(offset, end);
 
     final macBytes = chunk.sublist(chunk.length - 16);
     final cipherText = chunk.sublist(0, chunk.length - 16);
 
-    final chunkIndex = offset ~/ encryptedChunkSize;
-
     final nonce = Uint8List.fromList(baseNonce);
-    nonce[8] = (chunkIndex >> 24) & 0xFF;
-    nonce[9] = (chunkIndex >> 16) & 0xFF;
-    nonce[10] = (chunkIndex >> 8) & 0xFF;
-    nonce[11] = chunkIndex & 0xFF;
+    nonce[8] = (i >> 24) & 0xFF;
+    nonce[9] = (i >> 16) & 0xFF;
+    nonce[10] = (i >> 8) & 0xFF;
+    nonce[11] = i & 0xFF;
 
     final decrypted = await algorithm.decrypt(
       SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
@@ -242,7 +261,11 @@ Future<List<int>> _decryptFile(
     offset = end;
   }
 
-  return output.toBytes();
+  final dir = await getTemporaryDirectory();
+  final file = File("${dir.path}/$fileName");
+  await file.writeAsBytes(output.toBytes());
+
+  return file;
 }
 
 
@@ -296,6 +319,8 @@ Future<List<int>> _decryptFile(
         ],
       );
     }
+
+    
 
     return AppBar(
       backgroundColor: AppColors.bg,

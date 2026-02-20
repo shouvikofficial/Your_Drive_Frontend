@@ -5,11 +5,9 @@ import '../theme/app_colors.dart';
 import '../services/backup_service.dart';
 import '../services/file_service.dart';
 import '../services/upload_manager.dart'; // ✅ Import UploadManager
-
 import 'widgets/category_card.dart';
 import 'widgets/folder_card.dart';
 import 'widgets/bottom_nav_bar.dart';
-
 import 'files_page.dart';
 import 'create_folder_page.dart';
 import 'notification_list_page.dart';
@@ -17,32 +15,32 @@ import 'upload_page.dart'; // ✅ Import UploadPage for navigation
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
-
   @override
-  State<DashboardPage> createState() => _DashboardPageState();
+  State createState() => _DashboardPageState();
 }
 
-class _DashboardPageState extends State<DashboardPage> {
+class _DashboardPageState extends State {
   late Future<List<Map<String, dynamic>>> foldersFuture;
   final backupService = BackupService();
-
   int photoCount = 0;
   int videoCount = 0;
   int musicCount = 0;
   int docCount = 0;
-
   @override
   void initState() {
     super.initState();
+
     _refreshAllData();
   }
 
-  // ============================================================
-  // DATA LOGIC
-  // ============================================================
+// ============================================================
+// DATA LOGIC
+// ============================================================
   Future<List<Map<String, dynamic>>> fetchFolders() async {
     final supabase = Supabase.instance.client;
+
     final user = supabase.auth.currentUser;
+
     if (user == null) return [];
 
     final res = await supabase
@@ -54,23 +52,45 @@ class _DashboardPageState extends State<DashboardPage> {
     return List<Map<String, dynamic>>.from(res);
   }
 
-  Future<void> _fetchFileCounts() async {
+  Future _fetchFileCounts() async {
     final supabase = Supabase.instance.client;
+
     final user = supabase.auth.currentUser;
+
     if (user == null) return;
 
     final results = await Future.wait([
-      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'image'),
-      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'video'),
-      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'music'),
-      supabase.from('files').count(CountOption.exact).eq('user_id', user.id).eq('type', 'document'),
+      supabase
+          .from('files')
+          .count(CountOption.exact)
+          .eq('user_id', user.id)
+          .eq('type', 'image'),
+      supabase
+          .from('files')
+          .count(CountOption.exact)
+          .eq('user_id', user.id)
+          .eq('type', 'video'),
+      supabase
+          .from('files')
+          .count(CountOption.exact)
+          .eq('user_id', user.id)
+          .eq('type', 'music'),
+      supabase
+          .from('files')
+          .count(CountOption.exact)
+          .eq('user_id', user.id)
+          .eq('type', 'document'),
     ]);
 
     if (!mounted) return;
+
     setState(() {
       photoCount = results[0];
+
       videoCount = results[1];
+
       musicCount = results[2];
+
       docCount = results[3];
     });
   }
@@ -79,11 +99,13 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {
       foldersFuture = fetchFolders();
     });
+
     _fetchFileCounts();
   }
 
-  Future<void> _deleteFolder(String folderId) async {
+  Future _deleteFolder(String folderId) async {
     final supabase = Supabase.instance.client;
+
     final fileService = FileService();
 
     try {
@@ -102,8 +124,12 @@ class _DashboardPageState extends State<DashboardPage> {
       }));
 
       await supabase.from('folders').delete().eq('id', folderId);
+
       _refreshAllData();
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Folder deleted")));
+
+      if (mounted)
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text("Folder deleted")));
     } catch (e) {
       debugPrint("DELETE ERROR: $e");
     }
@@ -115,12 +141,16 @@ class _DashboardPageState extends State<DashboardPage> {
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text("Delete Folder?"),
-        content: Text("Delete '${folder['name']}' and its contents? This cannot be undone."),
+        content: Text(
+            "Delete '${folder['name']}' and its contents? This cannot be undone."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Cancel")),
           TextButton(
             onPressed: () {
               Navigator.pop(context);
+
               _deleteFolder(folder['id']);
             },
             child: const Text("Delete", style: TextStyle(color: Colors.red)),
@@ -130,19 +160,23 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Future<void> _navToPage(Widget page) async {
+  Future _navToPage(Widget page) async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+
     if (mounted) _refreshAllData();
   }
 
-  // ============================================================
-  // UI BUILD
-  // ============================================================
+// ============================================================
+// UI BUILD
+// ============================================================
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
+
     final isDesktop = screenWidth > 600;
+
     final crossAxisCount = isDesktop ? 4 : 2;
+
     final userId = Supabase.instance.client.auth.currentUser?.id;
 
     return Scaffold(
@@ -155,22 +189,40 @@ class _DashboardPageState extends State<DashboardPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               children: [
                 _buildHeader(),
+
                 const SizedBox(height: 24),
+
                 _buildSearchBar(),
+
                 const SizedBox(height: 30),
+
                 _buildCategoryGrid(),
+
                 const SizedBox(height: 30),
+
                 _buildBackupCard(),
+
                 const SizedBox(height: 30),
+
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text("All Folders", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
-                    TextButton(onPressed: _refreshAllData, child: const Text("Refresh", style: TextStyle(color: AppColors.blue))),
+                    const Text("All Folders",
+                        style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: -0.5)),
+                    TextButton(
+                        onPressed: _refreshAllData,
+                        child: const Text("Refresh",
+                            style: TextStyle(color: AppColors.blue))),
                   ],
                 ),
+
                 const SizedBox(height: 16),
+
                 _buildFolderGrid(crossAxisCount),
+
                 const SizedBox(height: 120), // Bottom padding for nav bar
               ],
             ),
@@ -178,10 +230,14 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
       ),
       bottomNavigationBar: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: Supabase.instance.client.from('notifications').stream(primaryKey: ['id']).eq('user_id', userId ?? ''),
+        stream: Supabase.instance.client
+            .from('notifications')
+            .stream(primaryKey: ['id']).eq('user_id', userId ?? ''),
         builder: (context, snapshot) {
           final notifications = snapshot.data ?? [];
-          final unreadCount = notifications.where((n) => n['is_read'] == false).length;
+
+          final unreadCount =
+              notifications.where((n) => n['is_read'] == false).length;
 
           return BottomNavBar(
             unreadCount: unreadCount,
@@ -196,123 +252,147 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // ✅ UPDATED HEADER WITH BACKGROUND UPLOAD INDICATOR
- Widget _buildHeader() {
-  return ListenableBuilder(
-    listenable: UploadManager(),
-    builder: (context, child) {
-      final manager = UploadManager();
-      final isUploading = manager.isUploading;
-      
-      // Calculate total pending items
-      final pendingCount = manager.uploadQueue.where((i) => 
-          i.status == 'waiting' || i.status == 'uploading').length;
-      
-      final hasUploads = pendingCount > 0 || isUploading;
+// ✅ UPDATED HEADER WITH BACKGROUND UPLOAD INDICATOR
+  Widget _buildHeader() {
+    return ListenableBuilder(
+      listenable: UploadManager(),
+      builder: (context, child) {
+        final manager = UploadManager();
 
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.end, // Align button with text baseline
-        children: [
-          // Left: Title Section
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "Storage",
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                "My Cloud",
-                style: TextStyle(
-                  fontSize: 32, // Larger, bolder title
-                  fontWeight: FontWeight.w800,
-                  color: Colors.black87,
-                  letterSpacing: -1.2, // Tight tracking for modern look
-                  height: 1.0,
-                ),
-              ),
-            ],
-          ),
+        final isUploading = manager.isUploading;
 
-          // Right: Upload Status Pill (Conditional)
-          if (hasUploads)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6), // Align visually with text
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () {
-                    Navigator.push(
-                      context, 
-                      MaterialPageRoute(builder: (_) => const UploadPage())
-                    );
-                  },
-                  borderRadius: BorderRadius.circular(30),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: AppColors.blue.withOpacity(0.08), // Subtle tint
-                      borderRadius: BorderRadius.circular(30),
-                      border: Border.all(
-                        color: AppColors.blue.withOpacity(0.2), 
-                        width: 1
+        // Calculate total pending items
+
+        final pendingCount = manager.uploadQueue
+            .where((i) => i.status == 'waiting' || i.status == 'uploading')
+            .length;
+
+        final hasUploads = pendingCount > 0 || isUploading;
+
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+
+          crossAxisAlignment:
+              CrossAxisAlignment.end, // Align button with text baseline
+
+          children: [
+            // Left: Title Section
+
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Storage",
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  "My Cloud",
+                  style: TextStyle(
+                    fontSize: 32, // Larger, bolder title
+
+                    fontWeight: FontWeight.w800,
+
+                    color: Colors.black87,
+
+                    letterSpacing: -1.2, // Tight tracking for modern look
+
+                    height: 1.0,
+                  ),
+                ),
+              ],
+            ),
+
+            // Right: Upload Status Pill (Conditional)
+
+            if (hasUploads)
+              Padding(
+                padding: const EdgeInsets.only(
+                    bottom: 6), // Align visually with text
+
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const UploadPage()));
+                    },
+                    borderRadius: BorderRadius.circular(30),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.blue.withOpacity(0.08), // Subtle tint
+
+                        borderRadius: BorderRadius.circular(30),
+
+                        border: Border.all(
+                            color: AppColors.blue.withOpacity(0.2), width: 1),
                       ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (isUploading)
-                          SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              valueColor: const AlwaysStoppedAnimation<Color>(AppColors.blue),
-                              strokeCap: StrokeCap.round, // Soft rounded ends
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isUploading)
+                            SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+
+                                valueColor: const AlwaysStoppedAnimation<Color>(
+                                    AppColors.blue),
+
+                                strokeCap: StrokeCap.round, // Soft rounded ends
+                              ),
+                            )
+                          else
+                            const Icon(
+                                Icons
+                                    .cloud_queue_rounded, // Modern outlined icon
+
+                                size: 18,
+                                color: AppColors.blue),
+                          const SizedBox(width: 8),
+                          Text(
+                            isUploading
+                                ? "Uploading..."
+                                : "$pendingCount Pending",
+                            style: const TextStyle(
+                              color: AppColors.blue,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
                             ),
-                          )
-                        else
-                          const Icon(
-                            Icons.cloud_queue_rounded, // Modern outlined icon
-                            size: 18, 
-                            color: AppColors.blue
                           ),
-                        
-                        const SizedBox(width: 8),
-                        
-                        Text(
-                          isUploading ? "Uploading..." : "$pendingCount Pending",
-                          style: const TextStyle(
-                            color: AppColors.blue,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-        ],
-      );
-    },
-  );
-}
+          ],
+        );
+      },
+    );
+  }
 
   Widget _buildSearchBar() {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 15, offset: const Offset(0, 8))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.03),
+              blurRadius: 15,
+              offset: const Offset(0, 8))
+        ],
       ),
       child: TextField(
         decoration: InputDecoration(
@@ -330,39 +410,39 @@ class _DashboardPageState extends State<DashboardPage> {
     return Column(
       children: [
         Row(children: [
-          Expanded(child: CategoryCard(
-            icon: Icons.image, 
-            title: "Photos", 
-            percent: "$photoCount files", 
-            color: AppColors.blue, 
-            onTap: () => _navToPage(const FilesPage(type: 'image'))
-          )),
+          Expanded(
+              child: CategoryCard(
+                  icon: Icons.image,
+                  title: "Photos",
+                  percent: "$photoCount files",
+                  color: AppColors.blue,
+                  onTap: () => _navToPage(const FilesPage(type: 'image')))),
           const SizedBox(width: 16),
-          Expanded(child: CategoryCard(
-            icon: Icons.videocam, 
-            title: "Videos", 
-            percent: "$videoCount files", 
-            color: AppColors.purple, 
-            onTap: () => _navToPage(const FilesPage(type: 'video'))
-          )),
+          Expanded(
+              child: CategoryCard(
+                  icon: Icons.videocam,
+                  title: "Videos",
+                  percent: "$videoCount files",
+                  color: AppColors.purple,
+                  onTap: () => _navToPage(const FilesPage(type: 'video')))),
         ]),
         const SizedBox(height: 16),
         Row(children: [
-          Expanded(child: CategoryCard(
-            icon: Icons.music_note, 
-            title: "Music", 
-            percent: "$musicCount files", 
-            color: AppColors.green, 
-            onTap: () => _navToPage(const FilesPage(type: 'music'))
-          )),
+          Expanded(
+              child: CategoryCard(
+                  icon: Icons.music_note,
+                  title: "Music",
+                  percent: "$musicCount files",
+                  color: AppColors.green,
+                  onTap: () => _navToPage(const FilesPage(type: 'music')))),
           const SizedBox(width: 16),
-          Expanded(child: CategoryCard(
-            icon: Icons.description_rounded, 
-            title: "Documents", 
-            percent: "$docCount files", 
-            color: Colors.teal, 
-            onTap: () => _navToPage(const FilesPage(type: 'document'))
-          )),
+          Expanded(
+              child: CategoryCard(
+                  icon: Icons.description_rounded,
+                  title: "Documents",
+                  percent: "$docCount files",
+                  color: Colors.teal,
+                  onTap: () => _navToPage(const FilesPage(type: 'document')))),
         ]),
       ],
     );
@@ -375,9 +455,17 @@ class _DashboardPageState extends State<DashboardPage> {
         return Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            gradient: LinearGradient(colors: [AppColors.blue, AppColors.blue.withOpacity(0.8)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+            gradient: LinearGradient(
+                colors: [AppColors.blue, AppColors.blue.withOpacity(0.8)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight),
             borderRadius: BorderRadius.circular(24),
-            boxShadow: [BoxShadow(color: AppColors.blue.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10))],
+            boxShadow: [
+              BoxShadow(
+                  color: AppColors.blue.withOpacity(0.3),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10))
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -388,16 +476,23 @@ class _DashboardPageState extends State<DashboardPage> {
                   const Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text("Auto Backup", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      Text("Auto Backup",
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold)),
                       SizedBox(height: 4),
-                      Text("Cloud Sync Active", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      Text("Cloud Sync Active",
+                          style:
+                              TextStyle(color: Colors.white70, fontSize: 12)),
                     ],
                   ),
                   GestureDetector(
                     onTap: () => backupService.startAutoBackup(),
                     child: Container(
                       padding: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
+                      decoration: const BoxDecoration(
+                          color: Colors.white24, shape: BoxShape.circle),
                       child: const Icon(Icons.sync, color: Colors.white),
                     ),
                   ),
@@ -419,8 +514,16 @@ class _DashboardPageState extends State<DashboardPage> {
                 builder: (_, status, __) => Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(status == "Idle" ? "Everything up to date" : status, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
-                    if (progress > 0) Text("${(progress * 100).toInt()}%", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    Text(status == "Idle" ? "Everything up to date" : status,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500)),
+                    if (progress > 0)
+                      Text("${(progress * 100).toInt()}%",
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),
@@ -435,17 +538,24 @@ class _DashboardPageState extends State<DashboardPage> {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: foldersFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+        if (snapshot.connectionState == ConnectionState.waiting)
+          return const Center(child: CircularProgressIndicator());
+
         if (!snapshot.hasData || snapshot.data!.isEmpty) {
           return Container(
             width: double.infinity,
             padding: const EdgeInsets.all(40),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24), border: Border.all(color: Colors.grey[200]!)),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.grey[200]!)),
             child: Column(
               children: [
-                Icon(Icons.create_new_folder_outlined, color: Colors.grey[300], size: 48),
+                Icon(Icons.create_new_folder_outlined,
+                    color: Colors.grey[300], size: 48),
                 const SizedBox(height: 12),
-                const Text("No folders created yet", style: TextStyle(color: Colors.black38)),
+                const Text("No folders created yet",
+                    style: TextStyle(color: Colors.black38)),
               ],
             ),
           );
@@ -463,14 +573,16 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           itemBuilder: (context, index) {
             final folder = snapshot.data![index];
+
             return FolderCard(
               icon: Icons.folder_rounded,
               title: folder['name'],
-              info: "Items inside", 
+              info: "Items inside",
               color: AppColors.blue,
               onLongPress: () => _showDeleteDialog(folder),
               onDelete: () => _showDeleteDialog(folder),
-              onTap: () => _navToPage(FilesPage(type: 'all', folderId: folder['id'])),
+              onTap: () =>
+                  _navToPage(FilesPage(type: 'all', folderId: folder['id'])),
             );
           },
         );

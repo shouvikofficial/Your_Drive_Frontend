@@ -10,7 +10,6 @@ import 'package:photo_view/photo_view.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:open_filex/open_filex.dart';
-
 import '../config/env.dart';
 import '../services/vault_service.dart';
 
@@ -33,9 +32,7 @@ class FileViewerPage extends StatefulWidget {
 class _FileViewerPageState extends State<FileViewerPage> {
   bool _isLoading = true;
   String? _error;
-
   Uint8List? _imageBytes;
-
   VideoPlayerController? _videoController;
   ChewieController? _chewieController;
   File? _tempFile;
@@ -50,16 +47,14 @@ class _FileViewerPageState extends State<FileViewerPage> {
   void dispose() {
     _videoController?.dispose();
     _chewieController?.dispose();
-
     if (_tempFile != null && _tempFile!.existsSync()) {
       _tempFile!.deleteSync();
     }
-
     super.dispose();
   }
 
   // =========================================================
-  // DOWNLOAD + DECRYPT
+  // DOWNLOAD FULL FILE + SAFE CHUNK DECRYPT
   // =========================================================
   Future<void> _downloadAndDecrypt() async {
     try {
@@ -67,57 +62,54 @@ class _FileViewerPageState extends State<FileViewerPage> {
 
       final fileData = await supabase
           .from('files')
-          .select('iv')
+          .select('iv, chunk_size, total_chunks')
           .eq('message_id', widget.messageId)
           .maybeSingle();
 
-      if (fileData == null) {
-        throw Exception("File metadata not found");
+      if (fileData == null) throw Exception("Metadata missing");
+
+      final ivBase64 = fileData['iv'];
+      final int chunkSize = fileData['chunk_size'];
+      final int totalChunks = fileData['total_chunks'];
+
+      if (ivBase64 == null) {
+        throw Exception("Missing IV");
       }
-
-      final String? ivBase64 = fileData['iv'];
-
-      if (ivBase64 == null || ivBase64.isEmpty) {
-        throw Exception("Missing encryption IV");
-      }
-
-      final nonce = base64Decode(ivBase64);
 
       final url = "${Env.backendBaseUrl}/api/file/${widget.messageId}";
-      final response = await http.get(Uri.parse(url));
 
+      // 🔥 STEP 1: Download FULL encrypted file
+      final response = await http.get(Uri.parse(url));
       if (response.statusCode != 200) {
-        throw Exception("Failed to download file");
+        throw Exception("Download failed");
       }
 
-      final secretKey = await VaultService().getSecretKey();
-      final algorithm = AesGcm.with256bits();
+      final encryptedBytes = response.bodyBytes;
 
-      final bodyBytes = response.bodyBytes;
-      if (bodyBytes.length < 16) throw Exception("Invalid encrypted file");
-
-      final macBytes = bodyBytes.sublist(bodyBytes.length - 16);
-      final ciphertext = bodyBytes.sublist(0, bodyBytes.length - 16);
-
-      final secretBox = SecretBox(ciphertext, nonce: nonce, mac: Mac(macBytes));
-
-      final decryptedBytes =
-          await algorithm.decrypt(secretBox, secretKey: secretKey);
+      // 🔥 STEP 2: Decrypt deterministically
+      final decryptedFile = await _decryptFullFile(
+        encryptedBytes,
+        ivBase64,
+        chunkSize,
+        totalChunks,
+      );
 
       if (!mounted) return;
 
-      // =====================================================
-      // TYPE HANDLING
-      // =====================================================
+      // 🔥 STEP 3: Display
       if (_isImage(widget.fileName)) {
+        final bytes = await decryptedFile.readAsBytes();
         setState(() {
-          _imageBytes = Uint8List.fromList(decryptedBytes);
+          _imageBytes = bytes;
           _isLoading = false;
         });
       } else if (_isVideo(widget.fileName)) {
-        await _initializeVideo(decryptedBytes);
+        _tempFile = decryptedFile;
+        await _initializeVideo();
       } else {
-        await _openDocument(decryptedBytes);
+        _tempFile = decryptedFile;
+        await OpenFilex.open(_tempFile!.path);
+        if (mounted) Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
@@ -130,14 +122,58 @@ class _FileViewerPageState extends State<FileViewerPage> {
   }
 
   // =========================================================
+  // FULL FILE CHUNK DECRYPT (NO STREAM GUESSING)
+  // =========================================================
+  Future<File> _decryptFullFile(
+    List<int> encryptedBytes,
+    String ivBase64,
+    int chunkSize,
+    int totalChunks,
+  ) async {
+    final baseNonce = base64Decode(ivBase64);
+    final secretKey = await VaultService().getSecretKey();
+    final algorithm = AesGcm.with256bits();
+
+    final output = BytesBuilder();
+    int offset = 0;
+
+    for (int i = 0; i < totalChunks; i++) {
+      final int end = (i == totalChunks - 1)
+          ? encryptedBytes.length
+          : offset + chunkSize + 16;
+
+      final chunk = encryptedBytes.sublist(offset, end);
+
+      final macBytes = chunk.sublist(chunk.length - 16);
+      final cipherText = chunk.sublist(0, chunk.length - 16);
+
+      final nonce = Uint8List.fromList(baseNonce);
+      nonce[8] = (i >> 24) & 0xFF;
+      nonce[9] = (i >> 16) & 0xFF;
+      nonce[10] = (i >> 8) & 0xFF;
+      nonce[11] = i & 0xFF;
+
+      final decrypted = await algorithm.decrypt(
+        SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
+        secretKey: secretKey,
+      );
+
+      output.add(decrypted);
+      offset = end;
+    }
+
+    final dir = await getTemporaryDirectory();
+    final file = File("${dir.path}/${widget.fileName}");
+    await file.writeAsBytes(output.toBytes());
+
+    return file;
+  }
+
+  // =========================================================
   // VIDEO PLAYER
   // =========================================================
-  Future<void> _initializeVideo(List<int> bytes) async {
+  Future<void> _initializeVideo() async {
     try {
-      final dir = await getTemporaryDirectory();
-      _tempFile = File("${dir.path}/${widget.fileName}");
-      await _tempFile!.writeAsBytes(bytes, flush: true);
-
       _videoController = VideoPlayerController.file(_tempFile!);
       await _videoController!.initialize();
 
@@ -158,38 +194,16 @@ class _FileViewerPageState extends State<FileViewerPage> {
   }
 
   // =========================================================
-  // DOCUMENT OPEN (PDF, DOCX, PPTX, etc.)
-  // =========================================================
-  Future<void> _openDocument(List<int> bytes) async {
-    try {
-      final dir = await getTemporaryDirectory();
-      _tempFile = File("${dir.path}/${widget.fileName}");
-      await _tempFile!.writeAsBytes(bytes, flush: true);
-
-      setState(() => _isLoading = false);
-
-      // 🔥 OPEN IN EXTERNAL APP
-      await OpenFilex.open(_tempFile!.path);
-
-      // 🔥 CLOSE THIS SCREEN → no “Preview not available”
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
-      setState(() {
-        _error = "Failed to open document";
-        _isLoading = false;
-      });
-    }
-  }
-
-  // =========================================================
-  // TYPE CHECKERS
+  // FILE TYPE CHECK
   // =========================================================
   bool _isImage(String name) =>
-      RegExp(r'\.(jpg|jpeg|png|gif|webp|bmp|heic)$', caseSensitive: false)
+      RegExp(r'\.(jpg|jpeg|png|gif|webp|bmp|heic)$',
+              caseSensitive: false)
           .hasMatch(name);
 
   bool _isVideo(String name) =>
-      RegExp(r'\.(mp4|mov|avi|mkv|webm)$', caseSensitive: false)
+      RegExp(r'\.(mp4|mov|avi|mkv|webm)$',
+              caseSensitive: false)
           .hasMatch(name);
 
   // =========================================================
@@ -202,7 +216,6 @@ class _FileViewerPageState extends State<FileViewerPage> {
       appBar: AppBar(
         backgroundColor: Colors.black.withOpacity(0.5),
         iconTheme: const IconThemeData(color: Colors.white),
-        elevation: 0,
         title: Text(widget.fileName,
             style: const TextStyle(color: Colors.white)),
       ),
@@ -210,23 +223,13 @@ class _FileViewerPageState extends State<FileViewerPage> {
         child: _isLoading
             ? const CircularProgressIndicator(color: Colors.white)
             : _error != null
-                ? Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.broken_image,
-                          color: Colors.white, size: 50),
-                      const SizedBox(height: 10),
-                      Text(_error!,
-                          style: const TextStyle(color: Colors.white70)),
-                    ],
-                  )
+                ? Text(_error!,
+                    style: const TextStyle(color: Colors.white))
                 : _chewieController != null
                     ? Chewie(controller: _chewieController!)
                     : _imageBytes != null
                         ? PhotoView(
                             imageProvider: MemoryImage(_imageBytes!),
-                            heroAttributes:
-                                PhotoViewHeroAttributes(tag: widget.messageId),
                           )
                         : const SizedBox.shrink(),
       ),
