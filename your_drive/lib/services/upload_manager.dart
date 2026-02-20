@@ -251,59 +251,6 @@ class UploadManager extends ChangeNotifier {
 
       int uploadedChunks = ResumeStore.getProgress(item.uploadId!);
 
-      // ---------- Small file direct upload ----------
-      if (!strategy.useChunking) {
-        final bytes = item.file != null
-            ? await item.file!.readAsBytes()
-            : await SafService.readChunk(
-                uri: item.uri!,
-                offset: 0,
-                length: fileSize,
-              );
-
-        if (bytes == null) throw Exception("Read failed");
-
- final secretBox =
-    await algorithm.encrypt(bytes, secretKey: key, nonce: baseNonce);
-
-final res = await RetryHelper.retry(() => dio.Dio().post(
-      chunkUploadUrl,
-      data: dio.FormData.fromMap({
-        "file": dio.MultipartFile.fromBytes(
-          secretBox.cipherText + secretBox.mac.bytes,
-          filename: fileName,
-        ),
-        "chunk_index": 0,
-        "total_chunks": 1,
-        "file_name": fileName,
-        "upload_id": item.uploadId,
-      }),
-      cancelToken: item.cancelToken,
-    ));
-
-// ⭐ GET REAL TELEGRAM MESSAGE ID FROM BACKEND
-final realMessageId = res.data["message_id"];
-
-await _saveToSupabase(
-  {
-    "file_id": item.uploadId,
-    "message_id": realMessageId, // ✅ FIXED
-  },
-  fileName,
-  fileSize,
-  fileHash,
-  base64Encode(baseNonce),
-  strategy.chunkSize,
-  1, // ✅ total_chunks = 1 for direct upload
-);
-
-
-        item.progress = 1.0;
-        item.status = 'done';
-        notifyListeners();
-        return;
-      }
-
       // ---------- Chunk setup ----------
       final chunkSize = strategy.chunkSize;
       final maxParallel = strategy.parallelChunks;

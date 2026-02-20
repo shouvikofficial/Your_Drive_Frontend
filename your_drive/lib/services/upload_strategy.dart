@@ -15,14 +15,14 @@ class UploadStrategy {
   }) {
     final mb = fileSize / (1024 * 1024);
 
-    // 🔹 Very small file → no chunking (direct upload)
+    // 🔹 Very small file
     if (mb <= 3) {
-      return UploadStrategy(
-        chunkSize: fileSize,
-        parallelChunks: 1,
-        useChunking: false,
-      );
-    }
+  return UploadStrategy(
+    chunkSize: 1 * 1024 * 1024, // 1MB chunk
+    parallelChunks: 1,
+    useChunking: true,
+  );
+}
 
     // 🔹 Small to medium files
     if (mb <= 100) {
