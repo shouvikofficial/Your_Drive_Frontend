@@ -1,8 +1,6 @@
 name: your_drive
 description: A high-performance Drive-like app powered by Telegram MTProto.
-
 publish_to: "none"
-
 version: 1.0.0+1
 
 environment:
@@ -12,16 +10,16 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # 🔹 Networking (Upgraded for 2GB uploads)
-  dio: ^5.4.0              # 🔥 REQUIRED for Chunked Uploads & Progress Tracking
+  # 🔹 Networking
+  dio: ^5.4.0
   http: ^1.2.0
 
   # 🔹 File picker
   file_picker: ^10.3.10
 
-  # 🔹 File system (DOWNLOAD SUPPORT ✅)
+  # 🔹 File system
   path_provider: ^2.1.2
-  path: ^1.9.0             # ✅ Added for easier file path handling
+  path: ^1.9.0
 
   # 🔹 Media / UI helpers
   url_launcher: ^6.3.2
@@ -29,19 +27,19 @@ dependencies:
   chewie: ^1.13.0
   video_player_win: ^3.2.2
 
-  # 🔹 Supabase (Auth + Database)
+  # 🔹 Supabase
   supabase_flutter: ^2.12.0
 
   # 🔹 Gallery & Permissions
   device_info_plus: ^10.1.0
-  photo_manager: ^3.0.0 
-  permission_handler: ^12.0.1 
-  
-  # 🔹 Local State & Background Logic
-  shared_preferences: ^2.2.0 
-  connectivity_plus: ^7.0.0  # ✅ Used by BackupService to check for Wi-Fi
-  battery_plus: ^7.0.0       # ✅ Used by BackupService to check power
-  workmanager: ^0.9.0+3      # ✅ Essential for background auto-syncing
+  photo_manager: ^3.0.0
+  permission_handler: ^12.0.1
+
+  # 🔹 Local State & Background
+  shared_preferences: ^2.2.0
+  connectivity_plus: ^7.0.0
+  battery_plus: ^7.0.0
+  workmanager: ^0.9.0+3
   google_sign_in: ^6.2.1
   photo_view: ^0.15.0
   local_auth: ^2.3.0
@@ -62,7 +60,7 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
   rename: ^3.1.0
-  
+  flutter_launcher_icons: ^0.14.4
 
 dev_dependencies:
   flutter_test:
@@ -71,6 +69,12 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  # Add your assets here if you have custom icons or images
-  # assets:
-  #   - assets/
+
+  assets:
+    - assets/icon/logo.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/logo.png"
+  remove_alpha_ios: true
