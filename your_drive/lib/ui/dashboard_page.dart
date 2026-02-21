@@ -19,17 +19,17 @@ class DashboardPage extends StatefulWidget {
   State createState() => _DashboardPageState();
 }
 
-class _DashboardPageState extends State {
+class _DashboardPageState extends State<DashboardPage> {
   late Future<List<Map<String, dynamic>>> foldersFuture;
   final backupService = BackupService();
   int photoCount = 0;
   int videoCount = 0;
   int musicCount = 0;
   int docCount = 0;
+  
   @override
   void initState() {
     super.initState();
-
     _refreshAllData();
   }
 
@@ -38,7 +38,6 @@ class _DashboardPageState extends State {
 // ============================================================
   Future<List<Map<String, dynamic>>> fetchFolders() async {
     final supabase = Supabase.instance.client;
-
     final user = supabase.auth.currentUser;
 
     if (user == null) return [];
@@ -54,7 +53,6 @@ class _DashboardPageState extends State {
 
   Future _fetchFileCounts() async {
     final supabase = Supabase.instance.client;
-
     final user = supabase.auth.currentUser;
 
     if (user == null) return;
@@ -86,11 +84,8 @@ class _DashboardPageState extends State {
 
     setState(() {
       photoCount = results[0];
-
       videoCount = results[1];
-
       musicCount = results[2];
-
       docCount = results[3];
     });
   }
@@ -99,13 +94,11 @@ class _DashboardPageState extends State {
     setState(() {
       foldersFuture = fetchFolders();
     });
-
     _fetchFileCounts();
   }
 
   Future _deleteFolder(String folderId) async {
     final supabase = Supabase.instance.client;
-
     final fileService = FileService();
 
     try {
@@ -124,12 +117,12 @@ class _DashboardPageState extends State {
       }));
 
       await supabase.from('folders').delete().eq('id', folderId);
-
       _refreshAllData();
 
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text("Folder deleted")));
+      }
     } catch (e) {
       debugPrint("DELETE ERROR: $e");
     }
@@ -150,7 +143,6 @@ class _DashboardPageState extends State {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-
               _deleteFolder(folder['id']);
             },
             child: const Text("Delete", style: TextStyle(color: Colors.red)),
@@ -160,9 +152,86 @@ class _DashboardPageState extends State {
     );
   }
 
+  // ============================================================
+  // NEW RENAME LOGIC
+  // ============================================================
+Future<void> _renameFolder(dynamic folderId, String newName) async {
+    if (newName.trim().isEmpty) return; // Don't allow empty names
+
+    try {
+      // Added .select() to force Supabase to return the updated row
+      final response = await Supabase.instance.client
+          .from('folders')
+          .update({'name': newName.trim()})
+          .eq('id', folderId)
+          .select();
+
+      // If response is empty, it means 0 rows were updated (Blocked by RLS!)
+      if (response.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("Rename failed: Blocked by database permissions (RLS)"),
+                backgroundColor: Colors.redAccent,
+              ));
+        }
+        return;
+      }
+
+      _refreshAllData(); // Refresh the grid to show the new name
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Folder renamed successfully")));
+      }
+    } catch (e) {
+      debugPrint("RENAME ERROR: $e");
+    }
+  }
+
+  void _showRenameDialog(Map<String, dynamic> folder) {
+    final TextEditingController controller = 
+        TextEditingController(text: folder['name']); // Pre-fill current name
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Rename Folder"),
+        content: TextField(
+          controller: controller,
+          autofocus: true, // Automatically pops up the keyboard
+          decoration: InputDecoration(
+            hintText: "Enter new folder name",
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          TextButton(
+            onPressed: () {
+              final newName = controller.text;
+              Navigator.pop(context); // Close the dialog
+              _renameFolder(folder['id'], newName); // Save the new name
+            },
+            child: const Text(
+              "Rename", 
+              style: TextStyle(color: AppColors.blue, fontWeight: FontWeight.bold)
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future _navToPage(Widget page) async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
-
     if (mounted) _refreshAllData();
   }
 
@@ -172,11 +241,8 @@ class _DashboardPageState extends State {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
-
     final isDesktop = screenWidth > 600;
-
     final crossAxisCount = isDesktop ? 4 : 2;
-
     final userId = Supabase.instance.client.auth.currentUser?.id;
 
     return Scaffold(
@@ -189,21 +255,13 @@ class _DashboardPageState extends State {
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               children: [
                 _buildHeader(),
-
                 const SizedBox(height: 24),
-
                 _buildSearchBar(),
-
                 const SizedBox(height: 30),
-
                 _buildCategoryGrid(),
-
                 const SizedBox(height: 30),
-
                 _buildBackupCard(),
-
                 const SizedBox(height: 30),
-
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -218,11 +276,8 @@ class _DashboardPageState extends State {
                             style: TextStyle(color: AppColors.blue))),
                   ],
                 ),
-
                 const SizedBox(height: 16),
-
                 _buildFolderGrid(crossAxisCount),
-
                 const SizedBox(height: 120), // Bottom padding for nav bar
               ],
             ),
@@ -235,7 +290,6 @@ class _DashboardPageState extends State {
             .stream(primaryKey: ['id']).eq('user_id', userId ?? ''),
         builder: (context, snapshot) {
           final notifications = snapshot.data ?? [];
-
           final unreadCount =
               notifications.where((n) => n['is_read'] == false).length;
 
@@ -258,11 +312,9 @@ class _DashboardPageState extends State {
       listenable: UploadManager(),
       builder: (context, child) {
         final manager = UploadManager();
-
         final isUploading = manager.isUploading;
 
         // Calculate total pending items
-
         final pendingCount = manager.uploadQueue
             .where((i) => i.status == 'waiting' || i.status == 'uploading')
             .length;
@@ -271,13 +323,9 @@ class _DashboardPageState extends State {
 
         return Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-
-          crossAxisAlignment:
-              CrossAxisAlignment.end, // Align button with text baseline
-
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             // Left: Title Section
-
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -295,13 +343,9 @@ class _DashboardPageState extends State {
                   "My Cloud",
                   style: TextStyle(
                     fontSize: 32, // Larger, bolder title
-
                     fontWeight: FontWeight.w800,
-
                     color: Colors.black87,
-
                     letterSpacing: -1.2, // Tight tracking for modern look
-
                     height: 1.0,
                   ),
                 ),
@@ -309,12 +353,9 @@ class _DashboardPageState extends State {
             ),
 
             // Right: Upload Status Pill (Conditional)
-
             if (hasUploads)
               Padding(
-                padding: const EdgeInsets.only(
-                    bottom: 6), // Align visually with text
-
+                padding: const EdgeInsets.only(bottom: 6),
                 child: Material(
                   color: Colors.transparent,
                   child: InkWell(
@@ -329,10 +370,8 @@ class _DashboardPageState extends State {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 10),
                       decoration: BoxDecoration(
-                        color: AppColors.blue.withOpacity(0.08), // Subtle tint
-
+                        color: AppColors.blue.withOpacity(0.08),
                         borderRadius: BorderRadius.circular(30),
-
                         border: Border.all(
                             color: AppColors.blue.withOpacity(0.2), width: 1),
                       ),
@@ -345,18 +384,14 @@ class _DashboardPageState extends State {
                               height: 14,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2.5,
-
                                 valueColor: const AlwaysStoppedAnimation<Color>(
                                     AppColors.blue),
-
-                                strokeCap: StrokeCap.round, // Soft rounded ends
+                                strokeCap: StrokeCap.round,
                               ),
                             )
                           else
                             const Icon(
-                                Icons
-                                    .cloud_queue_rounded, // Modern outlined icon
-
+                                Icons.cloud_queue_rounded,
                                 size: 18,
                                 color: AppColors.blue),
                           const SizedBox(width: 8),
@@ -538,8 +573,9 @@ class _DashboardPageState extends State {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: foldersFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting)
+        if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
+        }
 
         if (!snapshot.hasData || snapshot.data!.isEmpty) {
           return Container(
@@ -579,10 +615,18 @@ class _DashboardPageState extends State {
               title: folder['name'],
               info: "Items inside",
               color: AppColors.blue,
-              onLongPress: () => _showDeleteDialog(folder),
-              onDelete: () => _showDeleteDialog(folder),
               onTap: () =>
                   _navToPage(FilesPage(type: 'all', folderId: folder['id'])),
+              
+              // ✅ Updated Bottom Sheet Actions
+              onDelete: () => _showDeleteDialog(folder),
+              onRename: () => _showRenameDialog(folder), // This now correctly triggers the popup!
+              onShare: () {
+                debugPrint("Share ${folder['name']}");
+              },
+              onStar: () {
+                debugPrint("Star ${folder['name']}");
+              },
             );
           },
         );

@@ -7,7 +7,11 @@ class FolderCard extends StatelessWidget {
   final String info;
   final Color color;
   final VoidCallback onTap;
-  final VoidCallback? onLongPress;
+  
+  // New Callbacks for Google Drive-like options
+  final VoidCallback? onRename;
+  final VoidCallback? onShare;
+  final VoidCallback? onStar;
   final VoidCallback? onDelete;
 
   const FolderCard({
@@ -17,54 +21,157 @@ class FolderCard extends StatelessWidget {
     required this.info,
     required this.color,
     required this.onTap,
-    this.onLongPress,
+    this.onRename,
+    this.onShare,
+    this.onStar,
     this.onDelete,
   });
+
+  /// Opens a Google Drive-style Bottom Sheet menu
+  void _showActionMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min, // Wrap content
+              children: [
+                // Header: Shows folder details in the menu
+                ListTile(
+                  leading: Container(
+                    height: 40,
+                    width: 40,
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(icon, color: color, size: 22),
+                  ),
+                  title: Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    info,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.black.withOpacity(0.5),
+                    ),
+                  ),
+                ),
+                Divider(color: Colors.grey.withOpacity(0.2)),
+
+                // Menu Options
+                _buildMenuOption(
+                  context,
+                  icon: Icons.person_add_alt_1_rounded,
+                  label: "Share",
+                  onTap: onShare,
+                ),
+                _buildMenuOption(
+                  context,
+                  icon: Icons.star_border_rounded,
+                  label: "Add to Starred",
+                  onTap: onStar,
+                ),
+                _buildMenuOption(
+                  context,
+                  icon: Icons.edit_rounded,
+                  label: "Rename",
+                  onTap: onRename,
+                ),
+                _buildMenuOption(
+                  context,
+                  icon: Icons.delete_rounded,
+                  label: "Delete",
+                  onTap: onDelete,
+                  isDestructive: true, // Makes it red
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Helper widget to keep menu options clean and consistent
+  Widget _buildMenuOption(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+    bool isDestructive = false,
+  }) {
+    final textColor = isDestructive ? Colors.redAccent : Colors.black87;
+    final iconColor = isDestructive ? Colors.redAccent : Colors.black54;
+
+    return ListTile(
+      leading: Icon(icon, color: iconColor, size: 22),
+      title: Text(
+        label,
+        style: TextStyle(
+          color: textColor,
+          fontWeight: FontWeight.w500,
+          fontSize: 14,
+        ),
+      ),
+      onTap: () {
+        Navigator.pop(context); // Close the bottom sheet
+        if (onTap != null) onTap(); // Execute the action
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      onLongPress: onLongPress,
+      onLongPress: () => _showActionMenu(context), // Triggers menu on hold
       child: GlassCard(
         child: Stack(
           children: [
-            /// 1. MAIN CONTENT (Compact & Clean)
+            /// 1. MAIN CONTENT (Compact & Clean - Untouched)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 12), // Balanced padding
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Folder Icon (Smaller & Sleeker)
                   Container(
-                    height: 36, // Reduced size
+                    height: 36,
                     width: 36,
                     decoration: BoxDecoration(
-                      color: color.withOpacity(0.1), // Very subtle background
-                      borderRadius: BorderRadius.circular(10), // Soft square look
+                      color: color.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     alignment: Alignment.center,
                     child: Icon(icon, color: color, size: 20),
                   ),
-                  
-                  const Spacer(), // Pushes text to bottom naturally
-                  
-                  // Folder Name
+                  const Spacer(),
                   Text(
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 14, // Perfect size for cards
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: Colors.black87,
                       letterSpacing: 0.2,
                     ),
                   ),
-                  
-                  const SizedBox(height: 3), // Tiny gap
-                  
-                  // Subtitle (Tap to open)
+                  const SizedBox(height: 3),
                   Text(
                     info,
                     style: TextStyle(
@@ -83,53 +190,17 @@ class FolderCard extends StatelessWidget {
               right: 4,
               child: Material(
                 color: Colors.transparent,
-                child: SizedBox(
-                  width: 30, // Restrict touch area so it doesn't overlap text
-                  height: 30,
-                  child: PopupMenuButton<String>(
-                    padding: EdgeInsets.zero,
-                    icon: Icon(
-                      Icons.more_horiz_rounded, // Horizontal dots look cleaner
-                      color: Colors.black.withOpacity(0.3), 
-                      size: 20
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(15),
+                  onTap: () => _showActionMenu(context), // Triggers menu on tap
+                  child: SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: Icon(
+                      Icons.more_horiz_rounded,
+                      color: Colors.black.withOpacity(0.3),
+                      size: 20,
                     ),
-                    elevation: 3,
-                    color: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    onSelected: (value) {
-                      if (value == 'delete' && onDelete != null) {
-                        onDelete!();
-                      }
-                    },
-                    itemBuilder: (context) => [
-                      PopupMenuItem(
-                        value: 'delete',
-                        height: 38,
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFECEC),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.delete_rounded, color: Colors.redAccent, size: 16),
-                            ),
-                            const SizedBox(width: 10),
-                            const Text(
-                              "Delete",
-                              style: TextStyle(
-                                color: Colors.redAccent,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
                   ),
                 ),
               ),
