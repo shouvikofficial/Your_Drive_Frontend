@@ -33,6 +33,8 @@ class _DashboardPageState extends State<DashboardPage> {
     _refreshAllData();
   }
 
+  
+
 // ============================================================
 // DATA LOGIC
 // ============================================================
@@ -307,115 +309,89 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
   }
 
 // ✅ UPDATED HEADER WITH BACKGROUND UPLOAD INDICATOR
-  Widget _buildHeader() {
-    return ListenableBuilder(
-      listenable: UploadManager(),
-      builder: (context, child) {
-        final manager = UploadManager();
-        final isUploading = manager.isUploading;
+ Widget _buildHeader() {
+  final manager = UploadManager();
 
-        // Calculate total pending items
-        final pendingCount = manager.uploadQueue
-            .where((i) => i.status == 'waiting' || i.status == 'uploading')
-            .length;
+  return ValueListenableBuilder<bool>(
+    valueListenable: manager.isUploadingNotifier,
+    builder: (context, isUploading, _) {
 
-        final hasUploads = pendingCount > 0 || isUploading;
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
 
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            // Left: Title Section
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Storage",
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
-                  ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Storage",
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.w600,
                 ),
-                const SizedBox(height: 4),
-                const Text(
-                  "My Cloud",
-                  style: TextStyle(
-                    fontSize: 32, // Larger, bolder title
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black87,
-                    letterSpacing: -1.2, // Tight tracking for modern look
-                    height: 1.0,
-                  ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                "My Cloud",
+                style: TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w800,
                 ),
-              ],
-            ),
+              ),
+            ],
+          ),
 
-            // Right: Upload Status Pill (Conditional)
-            if (hasUploads)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () {
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const UploadPage()));
-                    },
-                    borderRadius: BorderRadius.circular(30),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: AppColors.blue.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(30),
-                        border: Border.all(
-                            color: AppColors.blue.withOpacity(0.2), width: 1),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (isUploading)
-                            SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.5,
-                                valueColor: const AlwaysStoppedAnimation<Color>(
-                                    AppColors.blue),
-                                strokeCap: StrokeCap.round,
-                              ),
-                            )
-                          else
-                            const Icon(
-                                Icons.cloud_queue_rounded,
-                                size: 18,
-                                color: AppColors.blue),
-                          const SizedBox(width: 8),
-                          Text(
-                            isUploading
-                                ? "Uploading..."
-                                : "$pendingCount Pending",
-                            style: const TextStyle(
-                              color: AppColors.blue,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
+          if (isUploading)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const UploadPage(),
                     ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.blue.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(AppColors.blue),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        "Uploading...",
+                        style: TextStyle(
+                          color: AppColors.blue,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-          ],
-        );
-      },
-    );
-  }
+            ),
+        ],
+      );
+    },
+  );
+}
 
   Widget _buildSearchBar() {
     return Container(

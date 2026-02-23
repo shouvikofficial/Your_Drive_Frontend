@@ -268,6 +268,54 @@ Future<File> _decryptFullFile(
   return file;
 }
 
+Future<Uint8List?> _getThumbnail(Map<String, dynamic> file) async {
+  try {
+    if (file['thumbnail_id'] == null) return null;
+
+    // thumbnail_iv may already be in the file map from the list query
+    final String? thumbIvBase64 =
+        file['thumbnail_iv'] as String? ??
+        await _fetchThumbnailIv(file['message_id']);
+
+    if (thumbIvBase64 == null) return null;
+
+    final url =
+        "${Env.backendBaseUrl}/api/thumbnail/${file['thumbnail_id']}";
+
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode != 200) return null;
+
+    final encryptedBytes = response.bodyBytes;
+
+    final secretKey = await VaultService().getSecretKey();
+    final algorithm = AesGcm.with256bits();
+
+    final nonce = base64Decode(thumbIvBase64); // ✅ use thumbnail's own IV
+
+    final macBytes = encryptedBytes.sublist(encryptedBytes.length - 16);
+    final cipherText = encryptedBytes.sublist(0, encryptedBytes.length - 16);
+
+    final decrypted = await algorithm.decrypt(
+      SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
+      secretKey: secretKey,
+    );
+
+    return Uint8List.fromList(decrypted);
+  } catch (e) {
+    debugPrint("Thumbnail error: $e");
+    return null;
+  }
+}
+
+Future<String?> _fetchThumbnailIv(dynamic messageId) async {
+  final meta = await Supabase.instance.client
+      .from('files')
+      .select('thumbnail_iv')
+      .eq('message_id', messageId)
+      .maybeSingle();
+  return meta?['thumbnail_iv'] as String?;
+}
+
 
 
   @override
@@ -379,6 +427,7 @@ Future<File> _decryptFullFile(
           },
           onLongPress: () => _toggleSelection(file),
           onMore: () => isSelectionMode ? _toggleSelection(file) : _showOptions(file),
+          getThumbnail: _getThumbnail,
         );
       },
     );
@@ -469,13 +518,15 @@ class _FileCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onMore;
+  final Future<Uint8List?> Function(Map<String, dynamic>) getThumbnail;
 
   const _FileCard({
     required this.file, 
     required this.isSelected, 
     required this.onTap, 
     required this.onLongPress,
-    required this.onMore
+    required this.onMore,
+    required this.getThumbnail,
   });
 
   @override
@@ -496,8 +547,32 @@ class _FileCard extends StatelessWidget {
             Column(
               children: [
                 Expanded(
-                  child: Center(child: _FileIcon(type: file['type'], size: 48)),
-                ),
+  child: FutureBuilder<Uint8List?>(
+    future: getThumbnail(file),
+    builder: (context, snapshot) {
+      if (snapshot.connectionState == ConnectionState.waiting) {
+        return const Center(
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+      }
+
+      if (snapshot.hasData && snapshot.data != null) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Image.memory(
+            snapshot.data!,
+            fit: BoxFit.cover,
+            width: double.infinity,
+          ),
+        );
+      }
+
+      return Center(
+        child: _FileIcon(type: file['type'], size: 48),
+      );
+    },
+  ),
+),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 0, 4, 12),
                   child: Row(
