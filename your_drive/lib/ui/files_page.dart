@@ -512,7 +512,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
 
 // --- Card & List Items ---
 
-class _FileCard extends StatelessWidget {
+class _FileCard extends StatefulWidget {
   final Map<String, dynamic> file;
   final bool isSelected;
   final VoidCallback onTap;
@@ -530,16 +530,29 @@ class _FileCard extends StatelessWidget {
   });
 
   @override
+  State<_FileCard> createState() => _FileCardState();
+}
+
+class _FileCardState extends State<_FileCard> {
+  late final Future<Uint8List?> _thumbnailFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _thumbnailFuture = widget.getThumbnail(widget.file); // cached once
+  }
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
+      onTap: widget.onTap,
+      onLongPress: widget.onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: isSelected ? Border.all(color: AppColors.blue, width: 2) : Border.all(color: Colors.transparent, width: 2),
+          border: widget.isSelected ? Border.all(color: AppColors.blue, width: 2) : Border.all(color: Colors.transparent, width: 2),
           boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))],
         ),
         child: Stack(
@@ -547,51 +560,51 @@ class _FileCard extends StatelessWidget {
             Column(
               children: [
                 Expanded(
-  child: FutureBuilder<Uint8List?>(
-    future: getThumbnail(file),
-    builder: (context, snapshot) {
-      if (snapshot.connectionState == ConnectionState.waiting) {
-        return const Center(
-          child: CircularProgressIndicator(strokeWidth: 2),
-        );
-      }
+                  child: FutureBuilder<Uint8List?>(
+                    future: _thumbnailFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        );
+                      }
 
-      if (snapshot.hasData && snapshot.data != null) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: Image.memory(
-            snapshot.data!,
-            fit: BoxFit.cover,
-            width: double.infinity,
-          ),
-        );
-      }
+                      if (snapshot.hasData && snapshot.data != null) {
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: Image.memory(
+                            snapshot.data!,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                          ),
+                        );
+                      }
 
-      return Center(
-        child: _FileIcon(type: file['type'], size: 48),
-      );
-    },
-  ),
-),
+                      return Center(
+                        child: _FileIcon(type: widget.file['type'], size: 48),
+                      );
+                    },
+                  ),
+                ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 0, 4, 12),
                   child: Row(
                     children: [
                       Expanded(
                         child: Text(
-                          file['name'],
+                          widget.file['name'],
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                         ),
                       ),
-                      IconButton(icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey), onPressed: onMore),
+                      IconButton(icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey), onPressed: widget.onMore),
                     ],
                   ),
                 ),
               ],
             ),
-            if (isSelected)
+            if (widget.isSelected)
               const Positioned(
                 top: 10,
                 right: 10,
