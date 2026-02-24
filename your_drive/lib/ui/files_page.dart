@@ -818,11 +818,81 @@ class _FileListItemState extends State<_FileListItem> {
               ),
           ],
         ),
-        title: Text(widget.file['name'], style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-        subtitle: Text(widget.file['type'].toUpperCase(), style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+        title: Text(widget.file['name'], maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 3),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _typeColor(widget.file['type']).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      widget.file['type'].toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: _typeColor(widget.file['type']),
+                      ),
+                    ),
+                  ),
+                  if (widget.file['size'] != null) ...[  
+                    const SizedBox(width: 6),
+                    Text(
+                      _formatSize(widget.file['size']),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 3),
+              Text(
+                _formatDate(widget.file['created_at']),
+                style: TextStyle(fontSize: 11, color: Colors.grey[400]),
+              ),
+            ],
+          ),
+        ),
+        isThreeLine: true,
         trailing: widget.isSelected ? null : IconButton(icon: const Icon(Icons.more_vert, color: Colors.grey), onPressed: widget.onMore),
       ),
     );
+  }
+  static String _formatSize(dynamic bytes) {
+    if (bytes == null) return '';
+    final int b = bytes is int ? bytes : int.tryParse(bytes.toString()) ?? 0;
+    if (b < 1024) return '$b B';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} KB';
+    if (b < 1024 * 1024 * 1024) return '${(b / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(b / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  static String _formatDate(dynamic isoDate) {
+    if (isoDate == null) return '';
+    try {
+      final dt = DateTime.parse(isoDate.toString()).toLocal();
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final period = dt.hour < 12 ? 'AM' : 'PM';
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '${months[dt.month - 1]} ${dt.day}, ${dt.year}  ·  $hour:$min $period';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static Color _typeColor(String type) {
+    switch (type.toLowerCase()) {
+      case 'image': return AppColors.blue;
+      case 'video': return Colors.purple;
+      case 'music': return Colors.orange;
+      default: return Colors.grey;
+    }
   }
 }
 
