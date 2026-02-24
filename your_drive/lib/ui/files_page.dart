@@ -580,6 +580,11 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
           const SizedBox(height: 12),
           Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10))),
           ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text("Info"),
+            onTap: () { Navigator.pop(context); _showFileInfo(file); },
+          ),
+          ListTile(
             leading: const Icon(Icons.drive_file_rename_outline),
             title: const Text("Rename"),
             onTap: () { Navigator.pop(context); _renameFile(file); },
@@ -609,6 +614,74 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
           ),
           const SizedBox(height: 20),
         ],
+      ),
+    );
+  }
+
+  void _showFileInfo(Map<String, dynamic> file) {
+    final thumbFuture = _getCachedThumbnail(file);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Handle
+            Center(
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            // Thumbnail / icon
+            Center(
+              child: FutureBuilder<Uint8List?>(
+                future: thumbFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return Container(
+                      width: 90, height: 90,
+                      decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(16)),
+                      child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                    );
+                  }
+                  if (snapshot.hasData && snapshot.data != null) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Image.memory(snapshot.data!, width: 90, height: 90, fit: BoxFit.cover),
+                    );
+                  }
+                  return Container(
+                    width: 90, height: 90,
+                    decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(16)),
+                    child: Center(child: _FileIcon(type: file['type'] ?? '', size: 42)),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+            // File name
+            Center(
+              child: Text(
+                file['name'] ?? '-',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 10),
+            _InfoRow(icon: Icons.category_outlined,       label: 'Type',     value: (file['type'] ?? '-').toString().toUpperCase()),
+            _InfoRow(icon: Icons.storage_outlined,        label: 'Size',     value: _FileListItemState._formatSize(file['size'])),
+            _InfoRow(icon: Icons.calendar_today_outlined, label: 'Uploaded', value: _FileListItemState._formatDate(file['created_at'])),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
@@ -926,5 +999,39 @@ class _FileIcon extends StatelessWidget {
     }
 
     return Icon(icon, size: size, color: color);
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const _InfoRow({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: Colors.grey[500]),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 80,
+            child: Text(label, style: TextStyle(fontSize: 13, color: Colors.grey[500])),
+          ),
+          Expanded(
+            child: Text(
+              value.isEmpty ? '-' : value,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
