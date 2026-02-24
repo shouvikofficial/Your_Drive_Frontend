@@ -103,6 +103,95 @@ class _FilesPageState extends State<FilesPage> {
 
   // --- Bulk Actions ---
 
+  // --- Rename Logic ---
+
+  String _resolveUniqueName(String desiredName, String excludeId) {
+    final existing = _files
+        .where((f) => f['id'] != excludeId)
+        .map((f) => f['name'] as String)
+        .toSet();
+
+    if (!existing.contains(desiredName)) return desiredName;
+
+    // Split name and extension
+    final dotIndex = desiredName.lastIndexOf('.');
+    final String baseName;
+    final String ext;
+    if (dotIndex != -1 && dotIndex != 0) {
+      baseName = desiredName.substring(0, dotIndex);
+      ext = desiredName.substring(dotIndex); // includes the dot
+    } else {
+      baseName = desiredName;
+      ext = '';
+    }
+
+    int counter = 1;
+    String candidate;
+    do {
+      candidate = '$baseName ($counter)$ext';
+      counter++;
+    } while (existing.contains(candidate));
+
+    return candidate;
+  }
+
+  Future<void> _renameFile(Map<String, dynamic> file) async {
+    final controller = TextEditingController(text: file['name']);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename File'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            labelText: 'File name',
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+
+    if (newName == null || newName.isEmpty || newName == file['name']) return;
+
+    final resolvedName = _resolveUniqueName(newName, file['id'] as String);
+
+    try {
+      await Supabase.instance.client
+          .from('files')
+          .update({'name': resolvedName})
+          .eq('id', file['id']);
+
+      if (resolvedName != newName && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved as "$resolvedName" to avoid duplicates.'),
+          ),
+        );
+      }
+
+      await _loadData();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Rename failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   Future<void> _bulkDelete() async {
     final count = selectedFiles.length;
     final confirmed = await showDialog<bool>(
@@ -453,6 +542,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
           },
           onLongPress: () => _toggleSelection(file),
           onMore: () => isSelectionMode ? _toggleSelection(file) : _showOptions(file),
+          getThumbnail: _getThumbnail,
         );
       },
     );
@@ -480,6 +570,11 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
         children: [
           const SizedBox(height: 12),
           Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10))),
+          ListTile(
+            leading: const Icon(Icons.drive_file_rename_outline),
+            title: const Text("Rename"),
+            onTap: () { Navigator.pop(context); _renameFile(file); },
+          ),
           ListTile(
             leading: const Icon(Icons.share_outlined),
             title: const Text("Share Securely"),
@@ -621,42 +716,89 @@ class _FileCardState extends State<_FileCard> {
   }
 }
 
-class _FileListItem extends StatelessWidget {
+class _FileListItem extends StatefulWidget {
   final Map<String, dynamic> file;
   final bool isSelected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onMore;
+  final Future<Uint8List?> Function(Map<String, dynamic>) getThumbnail;
 
   const _FileListItem({
-    required this.file, 
-    required this.isSelected, 
-    required this.onTap, 
+    required this.file,
+    required this.isSelected,
+    required this.onTap,
     required this.onLongPress,
-    required this.onMore
+    required this.onMore,
+    required this.getThumbnail,
   });
+
+  @override
+  State<_FileListItem> createState() => _FileListItemState();
+}
+
+class _FileListItemState extends State<_FileListItem> {
+  late final Future<Uint8List?> _thumbnailFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _thumbnailFuture = widget.getThumbnail(widget.file);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: isSelected ? AppColors.blue.withOpacity(0.05) : Colors.transparent,
+        color: widget.isSelected ? AppColors.blue.withOpacity(0.05) : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
       ),
       child: ListTile(
-        onTap: onTap,
-        onLongPress: onLongPress,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         leading: Stack(
           children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(12)),
-              child: _FileIcon(type: file['type'], size: 24),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                width: 52,
+                height: 52,
+                child: FutureBuilder<Uint8List?>(
+                  future: _thumbnailFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return Container(
+                        color: Colors.grey[100],
+                        child: const Center(
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                      );
+                    }
+                    if (snapshot.hasData && snapshot.data != null) {
+                      return Image.memory(
+                        snapshot.data!,
+                        fit: BoxFit.cover,
+                        width: 52,
+                        height: 52,
+                      );
+                    }
+                    return Container(
+                      color: Colors.grey[100],
+                      padding: const EdgeInsets.all(14),
+                      child: _FileIcon(type: widget.file['type'], size: 24),
+                    );
+                  },
+                ),
+              ),
             ),
-            if (isSelected)
+            if (widget.isSelected)
               Positioned(
                 bottom: 0,
                 right: 0,
@@ -667,9 +809,9 @@ class _FileListItem extends StatelessWidget {
               ),
           ],
         ),
-        title: Text(file['name'], style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-        subtitle: Text(file['type'].toUpperCase(), style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-        trailing: isSelected ? null : IconButton(icon: const Icon(Icons.more_vert, color: Colors.grey), onPressed: onMore),
+        title: Text(widget.file['name'], style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+        subtitle: Text(widget.file['type'].toUpperCase(), style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+        trailing: widget.isSelected ? null : IconButton(icon: const Icon(Icons.more_vert, color: Colors.grey), onPressed: widget.onMore),
       ),
     );
   }
