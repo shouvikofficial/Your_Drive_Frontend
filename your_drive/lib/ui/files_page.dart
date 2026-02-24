@@ -38,6 +38,14 @@ class _FilesPageState extends State<FilesPage> {
   final Set<Map<String, dynamic>> selectedFiles = {};
   bool isSelectionMode = false;
 
+  // Thumbnail cache: keyed by file id so futures survive scroll recycling
+  final Map<dynamic, Future<Uint8List?>> _thumbnailCache = {};
+
+  Future<Uint8List?> _getCachedThumbnail(Map<String, dynamic> file) {
+    final key = file['id'];
+    return _thumbnailCache.putIfAbsent(key, () => _getThumbnail(file));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -68,6 +76,7 @@ class _FilesPageState extends State<FilesPage> {
 
       final response = await query.order('created_at', ascending: false);
       _files = List<Map<String, dynamic>>.from(response);
+      _thumbnailCache.clear();
       selectedFiles.clear();
       isSelectionMode = false;
     } catch (e) {
@@ -516,7 +525,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
           },
           onLongPress: () => _toggleSelection(file),
           onMore: () => isSelectionMode ? _toggleSelection(file) : _showOptions(file),
-          getThumbnail: _getThumbnail,
+          getThumbnail: _getCachedThumbnail,
         );
       },
     );
@@ -542,7 +551,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
           },
           onLongPress: () => _toggleSelection(file),
           onMore: () => isSelectionMode ? _toggleSelection(file) : _showOptions(file),
-          getThumbnail: _getThumbnail,
+          getThumbnail: _getCachedThumbnail,
         );
       },
     );
