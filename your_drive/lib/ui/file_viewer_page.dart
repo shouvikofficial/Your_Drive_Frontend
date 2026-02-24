@@ -31,6 +31,7 @@ class FileViewerPage extends StatefulWidget {
 
 class _FileViewerPageState extends State<FileViewerPage> {
   bool _isLoading = true;
+  String _loadingStatus = 'Fetching metadata…';
   String? _error;
   Uint8List? _imageBytes;
   VideoPlayerController? _videoController;
@@ -47,9 +48,7 @@ class _FileViewerPageState extends State<FileViewerPage> {
   void dispose() {
     _videoController?.dispose();
     _chewieController?.dispose();
-    if (_tempFile != null && _tempFile!.existsSync()) {
-      _tempFile!.deleteSync();
-    }
+    // _tempFile is now the persistent cache — do NOT delete it here
     super.dispose();
   }
 
@@ -58,6 +57,29 @@ class _FileViewerPageState extends State<FileViewerPage> {
   // =========================================================
   Future<void> _downloadAndDecrypt() async {
     try {
+      // ── Cache check ──────────────────────────────────────
+      final dir = await getTemporaryDirectory();
+      final cacheFile = File("${dir.path}/msg_${widget.messageId}_${widget.fileName}");
+
+      if (cacheFile.existsSync()) {
+        // Serve from cache — no network, no decryption needed
+        if (mounted) setState(() => _loadingStatus = 'Opening from cache…');
+        if (!mounted) return;
+        if (_isImage(widget.fileName)) {
+          final bytes = await cacheFile.readAsBytes();
+          setState(() { _imageBytes = bytes; _isLoading = false; });
+        } else if (_isVideo(widget.fileName)) {
+          setState(() => _loadingStatus = 'Preparing player…');
+          _tempFile = cacheFile;
+          await _initializeVideo();
+        } else {
+          await OpenFilex.open(cacheFile.path);
+          if (mounted) Navigator.pop(context);
+        }
+        return;
+      }
+
+      // ── First open: fetch metadata, download, decrypt ────
       final supabase = Supabase.instance.client;
 
       final fileData = await supabase
@@ -72,26 +94,25 @@ class _FileViewerPageState extends State<FileViewerPage> {
       final int chunkSize = fileData['chunk_size'];
       final int totalChunks = fileData['total_chunks'];
 
-      if (ivBase64 == null) {
-        throw Exception("Missing IV");
-      }
+      if (ivBase64 == null) throw Exception("Missing IV");
 
       final url = "${Env.backendBaseUrl}/api/file/${widget.messageId}";
 
       // 🔥 STEP 1: Download FULL encrypted file
+      if (mounted) setState(() => _loadingStatus = 'Downloading…');
       final response = await http.get(Uri.parse(url));
-      if (response.statusCode != 200) {
-        throw Exception("Download failed");
-      }
+      if (response.statusCode != 200) throw Exception("Download failed");
 
       final encryptedBytes = response.bodyBytes;
 
       // 🔥 STEP 2: Decrypt deterministically
+      if (mounted) setState(() => _loadingStatus = 'Decrypting your data…');
       final decryptedFile = await _decryptFullFile(
         encryptedBytes,
         ivBase64,
         chunkSize,
         totalChunks,
+        cacheFile,   // write directly to cache path
       );
 
       if (!mounted) return;
@@ -104,9 +125,11 @@ class _FileViewerPageState extends State<FileViewerPage> {
           _isLoading = false;
         });
       } else if (_isVideo(widget.fileName)) {
+        if (mounted) setState(() => _loadingStatus = 'Preparing player…');
         _tempFile = decryptedFile;
         await _initializeVideo();
       } else {
+        if (mounted) setState(() => _loadingStatus = 'Opening file…');
         _tempFile = decryptedFile;
         await OpenFilex.open(_tempFile!.path);
         if (mounted) Navigator.pop(context);
@@ -129,6 +152,7 @@ class _FileViewerPageState extends State<FileViewerPage> {
     String ivBase64,
     int chunkSize,
     int totalChunks,
+    File targetFile,   // cache destination passed in
   ) async {
     final baseNonce = base64Decode(ivBase64);
     final secretKey = await VaultService().getSecretKey();
@@ -162,11 +186,8 @@ class _FileViewerPageState extends State<FileViewerPage> {
       offset = end;
     }
 
-    final dir = await getTemporaryDirectory();
-    final file = File("${dir.path}/${widget.fileName}");
-    await file.writeAsBytes(output.toBytes());
-
-    return file;
+    await targetFile.writeAsBytes(output.toBytes());
+    return targetFile;
   }
 
   // =========================================================
@@ -221,7 +242,7 @@ class _FileViewerPageState extends State<FileViewerPage> {
       ),
       body: Center(
         child: _isLoading
-            ? const CircularProgressIndicator(color: Colors.white)
+            ? _DecryptingIndicator(status: _loadingStatus)
             : _error != null
                 ? Text(_error!,
                     style: const TextStyle(color: Colors.white))
@@ -233,6 +254,45 @@ class _FileViewerPageState extends State<FileViewerPage> {
                           )
                         : const SizedBox.shrink(),
       ),
+    );
+  }
+}
+
+class _DecryptingIndicator extends StatelessWidget {
+  final String status;
+  const _DecryptingIndicator({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(
+          width: 42,
+          height: 42,
+          child: CircularProgressIndicator(
+            color: Colors.white,
+            strokeWidth: 3,
+          ),
+        ),
+        const SizedBox(height: 20),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.lock_outline, color: Colors.white54, size: 15),
+            const SizedBox(width: 7),
+            Text(
+              status,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
