@@ -5,6 +5,7 @@ import 'package:pin_code_fields/pin_code_fields.dart';
 import '../services/vault_service.dart';
 import '../theme/app_colors.dart';
 import '../ui/dashboard_page.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class VaultLoginPage extends StatefulWidget {
   const VaultLoginPage({super.key});
@@ -40,24 +41,43 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
   }
 
   Future<void> _checkStatusSilently() async {
-    final setup = await _vaultService.isVaultSetup();
-    
+  final supabase = Supabase.instance.client;
+  final user = supabase.auth.currentUser;
+
+  if (user == null) return;
+
+  try {
+    final response = await supabase
+        .from('profiles')
+        .select('vault_salt')
+        .eq('id', user.id)
+        .single();
+
+    final serverSalt = response['vault_salt'];
+
     if (mounted) {
       setState(() {
-        isSetup = setup;
-        if (!setup) {
+        isSetup = serverSalt != null;
+
+        if (!isSetup) {
           title = "Create Vault PIN";
           subTitle = "Set a secure PIN to protect your private files";
+        } else {
+          title = "Welcome Back";
+          subTitle = "Enter your 4-digit security PIN";
         }
       });
 
-      if (!setup) {
+      if (!isSetup) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _showInitialSafetyNotice();
         });
       }
     }
+  } catch (e) {
+    debugPrint("Vault check error: $e");
   }
+}
 
   // --- 🛡️ 1. NEW USER SAFETY NOTICE ---
   void _showInitialSafetyNotice() {
@@ -251,47 +271,47 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
   }
 
   Future<void> _handlePin(String pin) async {
-    // ⏳ Only show loading AFTER user types the PIN
-    setState(() => isLoading = true);
-    
-    // Tiny delay to make the interaction feel processed
-    await Future.delayed(const Duration(milliseconds: 300));
+  setState(() => isLoading = true);
 
-    try {
-      if (isSetup) {
-        // UNLOCK MODE
-        final success = await _vaultService.unlockVault(pin);
-        if (success) {
-          _goToDashboard();
-        } else {
-          throw Exception("Incorrect PIN");
-        }
-      } else {
-        // SETUP MODE
-        await _vaultService.setupVault(pin);
-        _goToDashboard();
+  await Future.delayed(const Duration(milliseconds: 300));
+
+  try {
+    if (isSetup) {
+      // 🔐 UNLOCK MODE (salt already exists in DB)
+      final success = await _vaultService.unlockVault(pin);
+
+      if (!success) {
+        throw Exception("Incorrect PIN");
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() => isLoading = false);
-        
-        // ❌ Error Shake Animation
-        errorController!.add(ErrorAnimationType.shake);
-        textEditingController.clear();
-        HapticFeedback.mediumImpact();
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text("Incorrect PIN. Please try again."),
-            backgroundColor: Colors.red.shade400,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            margin: const EdgeInsets.all(20),
+      _goToDashboard();
+    } else {
+      // 🆕 SETUP MODE (first time only)
+      await _vaultService.setupVault(pin);
+      _goToDashboard();
+    }
+  } catch (e) {
+    if (mounted) {
+      setState(() => isLoading = false);
+
+      errorController!.add(ErrorAnimationType.shake);
+      textEditingController.clear();
+      HapticFeedback.mediumImpact();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("Incorrect PIN. Please try again."),
+          backgroundColor: Colors.red.shade400,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
           ),
-        );
-      }
+          margin: const EdgeInsets.all(20),
+        ),
+      );
     }
   }
+}
 
   void _goToDashboard() {
     Navigator.pushReplacement(

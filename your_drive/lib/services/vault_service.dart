@@ -1,83 +1,94 @@
 import 'dart:convert';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class VaultService {
   static final VaultService _instance = VaultService._internal();
   factory VaultService() => _instance;
   VaultService._internal();
 
-  // 🔐 Hardware secure storage
-  final _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
-
   SecretKey? _cachedSecretKey;
-
-  static const _keyName = "vault_key";
-  static const _saltName = "vault_salt";
 
   final _aes = AesGcm.with256bits();
 
   // ============================================================
-  // 1️⃣ CHECK IF VAULT EXISTS
+  // 🔍 CHECK IF USER HAS PIN (SERVER SIDE)
   // ============================================================
   Future<bool> isVaultSetup() async {
-    try {
-      return await _storage.containsKey(key: _keyName);
-    } catch (_) {
-      return false;
-    }
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+
+    if (user == null) return false;
+
+    final response = await supabase
+        .from('profiles')
+        .select('vault_salt')
+        .eq('id', user.id)
+        .single();
+
+    return response['vault_salt'] != null;
   }
 
   // ============================================================
-  // 2️⃣ SETUP VAULT (FIRST TIME PIN)
+  // 🆕 FIRST TIME PIN SETUP
   // ============================================================
   Future<void> setupVault(String pin) async {
-    try {
-      // Generate random salt
-      final salt = _aes.newNonce();
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
 
-      // Derive strong key from PIN using PBKDF2
-      final pbkdf2 = Pbkdf2(
-        macAlgorithm: Hmac.sha256(),
-        iterations: 100000,
-        bits: 256,
-      );
-
-      final secretKey = await pbkdf2.deriveKey(
-        secretKey: SecretKey(utf8.encode(pin)),
-        nonce: salt,
-      );
-
-      final keyBytes = await secretKey.extractBytes();
-
-      // Store key + salt securely
-      await _storage.write(key: _keyName, value: base64Encode(keyBytes));
-      await _storage.write(key: _saltName, value: base64Encode(salt));
-
-      // Cache in memory for current session
-      _cachedSecretKey = secretKey;
-    } catch (e) {
-      throw Exception("Failed to setup vault: $e");
+    if (user == null) {
+      throw Exception("User not logged in");
     }
+
+    // 🔐 Generate random salt (16 bytes)
+    final salt = _aes.newNonce();
+
+    final pbkdf2 = Pbkdf2(
+      macAlgorithm: Hmac.sha256(),
+      iterations: 150000,
+      bits: 256,
+    );
+
+    final secretKey = await pbkdf2.deriveKey(
+      secretKey: SecretKey(utf8.encode(pin)),
+      nonce: salt,
+    );
+
+    // ✅ Save salt to Supabase (IMPORTANT)
+    await supabase
+        .from('profiles')
+        .update({'vault_salt': base64Encode(salt)})
+        .eq('id', user.id);
+
+    // Cache key in memory
+    _cachedSecretKey = secretKey;
   }
 
   // ============================================================
-  // 3️⃣ UNLOCK VAULT (PIN LOGIN)
+  // 🔓 UNLOCK VAULT (ENTER PIN)
   // ============================================================
   Future<bool> unlockVault(String pin) async {
     try {
-      final storedKey = await _storage.read(key: _keyName);
-      final storedSalt = await _storage.read(key: _saltName);
+      final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
 
-      if (storedKey == null || storedSalt == null) return false;
+      if (user == null) return false;
 
-      final salt = base64Decode(storedSalt);
+      final response = await supabase
+          .from('profiles')
+          .select('vault_salt')
+          .eq('id', user.id)
+          .single();
+
+      final saltBase64 = response['vault_salt'];
+
+      if (saltBase64 == null) return false;
+
+      final salt = base64Decode(saltBase64);
 
       final pbkdf2 = Pbkdf2(
         macAlgorithm: Hmac.sha256(),
-        iterations: 100000,
+        iterations: 150000,
         bits: 256,
       );
 
@@ -86,45 +97,32 @@ class VaultService {
         nonce: salt,
       );
 
-      final derivedBytes = await derivedKey.extractBytes();
-
-      if (base64Encode(derivedBytes) == storedKey) {
-        _cachedSecretKey = derivedKey;
-        return true;
-      }
-
-      return false;
-    } catch (_) {
+      _cachedSecretKey = derivedKey;
+      return true;
+    } catch (e) {
       return false;
     }
   }
 
   // ============================================================
-  // 4️⃣ GET SECRET KEY FOR ENCRYPTION
+  // 🔐 GET SECRET KEY (FOR ENCRYPTION / DECRYPTION)
   // ============================================================
   Future<SecretKey> getSecretKey() async {
-    if (_cachedSecretKey != null) return _cachedSecretKey!;
-
-    final storedKey = await _storage.read(key: _keyName);
-    if (storedKey == null) {
-      throw Exception("Vault locked. Enter PIN.");
+    if (_cachedSecretKey == null) {
+      throw Exception("Vault locked. Please enter PIN.");
     }
-
-    final keyBytes = base64Decode(storedKey);
-    _cachedSecretKey = await _aes.newSecretKeyFromBytes(keyBytes);
-
     return _cachedSecretKey!;
   }
 
   // ============================================================
-  // 5️⃣ GENERATE RANDOM NONCE (12 bytes for AES-GCM)
+  // 🔁 GENERATE NONCE (AES-GCM 12 BYTES)
   // ============================================================
   List<int> generateNonce() {
     return _aes.newNonce();
   }
 
   // ============================================================
-  // 6️⃣ LOCK VAULT (ON LOGOUT / APP CLOSE)
+  // 🔒 LOCK VAULT (ON LOGOUT)
   // ============================================================
   void lockVault() {
     _cachedSecretKey = null;

@@ -197,6 +197,24 @@ await _createSession();
         accessToken: accessToken,
       );
 
+      // ── Detect brand-new account (no prior registration) ─────────────────
+      final user = Supabase.instance.client.auth.currentUser;
+      final createdAt = user?.createdAt != null
+          ? DateTime.tryParse(user!.createdAt)
+          : null;
+      final isNewUser = createdAt != null &&
+          DateTime.now().toUtc().difference(createdAt.toUtc()).inSeconds < 15;
+
+      if (isNewUser) {
+        // Sign out the auto-created account immediately
+        await Supabase.instance.client.auth.signOut();
+        if (!mounted) return;
+        setState(() => loading = false);
+        _showNoAccountSheet(googleUser.email);
+        return;
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
       await _createSession();
 
       if (!mounted) return;
@@ -211,6 +229,132 @@ await _createSession();
     } finally {
       if (mounted) setState(() => loading = false);
     }
+  }
+
+  // ================= NO ACCOUNT SHEET =================
+  void _showNoAccountSheet(String email) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(28, 12, 28, 36),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            const SizedBox(height: 28),
+
+            // Icon
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.person_off_outlined,
+                  size: 40, color: Colors.red.shade400),
+            ),
+            const SizedBox(height: 20),
+
+            // Title
+            const Text(
+              "No Account Found",
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // Email chip
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.email_outlined,
+                      size: 15, color: Colors.grey[600]),
+                  const SizedBox(width: 6),
+                  Text(
+                    email,
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey[700],
+                        fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            Text(
+              "We couldn't find an account linked to this\nGoogle address. Create one to get started.",
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Colors.grey[500], height: 1.5),
+            ),
+            const SizedBox(height: 28),
+
+            // Sign Up button
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SignupPage()),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.blue,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
+                child: const Text("Create an Account",
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Cancel button
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text("Cancel",
+                    style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ================= SNACKBAR =================
