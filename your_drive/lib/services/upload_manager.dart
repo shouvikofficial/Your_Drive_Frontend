@@ -211,6 +211,19 @@ class UploadManager extends ChangeNotifier {
     return nonce;
   }
 
+// ================= Network Error Detection =================
+bool _isNoInternetError(Object e) {
+  if (e is SocketException) return true;
+  if (e is dio.DioException) {
+    if (e.error is SocketException) return true;
+    if (e.type == dio.DioExceptionType.connectionError) return true;
+    if (e.type == dio.DioExceptionType.connectionTimeout) return true;
+    if (e.type == dio.DioExceptionType.sendTimeout) return true;
+    if (e.type == dio.DioExceptionType.receiveTimeout) return true;
+  }
+  return false;
+}
+
 // ================= Upload Single File =================
 Future<void> _uploadSingleItemParallel(UploadItem item) async {
   item.status = 'preparing';
@@ -484,10 +497,12 @@ notifyListeners();
 
 
     } on dio.DioException catch (e) {
-      item.status = dio.CancelToken.isCancel(e) ? 'cancelled' : 'error';
+      item.status = dio.CancelToken.isCancel(e)
+          ? 'cancelled'
+          : (_isNoInternetError(e) ? 'no_internet' : 'error');
     } catch (e) {
       debugPrint("Upload error: $e");
-      item.status = 'error';
+      item.status = _isNoInternetError(e) ? 'no_internet' : 'error';
     } finally {
       notifyListeners();
     }

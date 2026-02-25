@@ -198,7 +198,7 @@ Future<void> pickFiles() async {
                                   : Text(
                                       allDone 
                                         ? "Done" 
-                                        : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error').length} Files",
+                                        : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet').length} Files",
                                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)
                                     ),
                             ),
@@ -295,6 +295,12 @@ switch (item.status) {
     statusColor = Colors.orange;
     statusIcon = Icons.cloud_done_outlined;
     statusText = "Already exists in cloud";
+    break;
+
+  case 'no_internet':
+    statusColor = Colors.orange;
+    statusIcon = Icons.wifi_off_rounded;
+    statusText = "No Internet";
     break;
 
   case 'error':
