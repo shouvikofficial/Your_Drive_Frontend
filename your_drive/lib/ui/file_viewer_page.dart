@@ -10,19 +10,27 @@ import 'package:photo_view/photo_view.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:share_plus/share_plus.dart';
 import '../config/env.dart';
 import '../services/vault_service.dart';
+import '../services/file_service.dart';
+import '../services/download_service.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FileViewerPage — Google-Drive-style viewer with swipe navigation
+// ─────────────────────────────────────────────────────────────────────────────
 
 class FileViewerPage extends StatefulWidget {
-  final String messageId;
-  final String fileName;
-  final String type;
+  /// All files the user can swipe through.
+  final List<Map<String, dynamic>> files;
+
+  /// Which file to open first.
+  final int initialIndex;
 
   const FileViewerPage({
     super.key,
-    required this.messageId,
-    required this.fileName,
-    required this.type,
+    required this.files,
+    required this.initialIndex,
   });
 
   @override
@@ -30,134 +38,122 @@ class FileViewerPage extends StatefulWidget {
 }
 
 class _FileViewerPageState extends State<FileViewerPage> {
-  bool _isLoading = true;
-  String _loadingStatus = 'Fetching metadata…';
-  String? _error;
-  Uint8List? _imageBytes;
-  VideoPlayerController? _videoController;
-  ChewieController? _chewieController;
-  File? _tempFile;
+  late final PageController _pageController;
+  late int _currentIndex;
 
   @override
   void initState() {
     super.initState();
-    _downloadAndDecrypt();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
   }
 
   @override
   void dispose() {
-    _videoController?.dispose();
-    _chewieController?.dispose();
-    // _tempFile is now the persistent cache — do NOT delete it here
+    _pageController.dispose();
     super.dispose();
   }
 
-  // =========================================================
-  // DOWNLOAD FULL FILE + SAFE CHUNK DECRYPT
-  // =========================================================
-  Future<void> _downloadAndDecrypt() async {
+  Map<String, dynamic> get _currentFile => widget.files[_currentIndex];
+
+  // ── Share (cache-aware: no re-decrypt if already cached) ──────────────────
+  Future<void> _shareFile(Map<String, dynamic> file) async {
     try {
-      // ── Cache check ──────────────────────────────────────
-      final dir = await getTemporaryDirectory();
-      final cacheFile = File("${dir.path}/msg_${widget.messageId}_${widget.fileName}");
-
-      if (cacheFile.existsSync()) {
-        // Serve from cache — no network, no decryption needed
-        if (mounted) setState(() => _loadingStatus = 'Opening from cache…');
-        if (!mounted) return;
-        if (_isImage(widget.fileName)) {
-          final bytes = await cacheFile.readAsBytes();
-          setState(() { _imageBytes = bytes; _isLoading = false; });
-        } else if (_isVideo(widget.fileName)) {
-          setState(() => _loadingStatus = 'Preparing player…');
-          _tempFile = cacheFile;
-          await _initializeVideo();
-        } else {
-          await OpenFilex.open(cacheFile.path);
-          if (mounted) Navigator.pop(context);
-        }
-        return;
-      }
-
-      // ── First open: fetch metadata, download, decrypt ────
-      final supabase = Supabase.instance.client;
-
-      final fileData = await supabase
-          .from('files')
-          .select('iv, chunk_size, total_chunks')
-          .eq('message_id', widget.messageId)
-          .maybeSingle();
-
-      if (fileData == null) throw Exception("Metadata missing");
-
-      final ivBase64 = fileData['iv'];
-      final int chunkSize = fileData['chunk_size'];
-      final int totalChunks = fileData['total_chunks'];
-
-      if (ivBase64 == null) throw Exception("Missing IV");
-
-      final url = "${Env.backendBaseUrl}/api/file/${widget.messageId}";
-
-      // 🔥 STEP 1: Download FULL encrypted file
-      if (mounted) setState(() => _loadingStatus = 'Downloading…');
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode != 200) throw Exception("Download failed");
-
-      final encryptedBytes = response.bodyBytes;
-
-      // 🔥 STEP 2: Decrypt deterministically
-      if (mounted) setState(() => _loadingStatus = 'Decrypting your data…');
-      final decryptedFile = await _decryptFullFile(
-        encryptedBytes,
-        ivBase64,
-        chunkSize,
-        totalChunks,
-        cacheFile,   // write directly to cache path
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Preparing file for sharing…"), duration: Duration(days: 1)),
       );
 
-      if (!mounted) return;
+      final dir = await getTemporaryDirectory();
+      final cacheFile = File("${dir.path}/msg_${file['message_id']}_${file['name']}");
 
-      // 🔥 STEP 3: Display
-      if (_isImage(widget.fileName)) {
-        final bytes = await decryptedFile.readAsBytes();
-        setState(() {
-          _imageBytes = bytes;
-          _isLoading = false;
-        });
-      } else if (_isVideo(widget.fileName)) {
-        if (mounted) setState(() => _loadingStatus = 'Preparing player…');
-        _tempFile = decryptedFile;
-        await _initializeVideo();
+      File decryptedFile;
+      if (cacheFile.existsSync()) {
+        // Already decrypted — reuse cache, no download needed
+        decryptedFile = cacheFile;
       } else {
-        if (mounted) setState(() => _loadingStatus = 'Opening file…');
-        _tempFile = decryptedFile;
-        await OpenFilex.open(_tempFile!.path);
-        if (mounted) Navigator.pop(context);
+        final supabase = Supabase.instance.client;
+        final fileData = await supabase
+            .from('files')
+            .select('iv, chunk_size, total_chunks')
+            .eq('message_id', file['message_id'])
+            .maybeSingle();
+
+        if (fileData == null) throw Exception("Metadata missing");
+
+        final response = await http.get(
+          Uri.parse("${Env.backendBaseUrl}/api/file/${file['message_id']}"),
+        );
+        if (response.statusCode != 200) throw Exception("Download failed");
+
+        decryptedFile = await _decryptFullFile(
+          response.bodyBytes,
+          fileData['iv'] as String,
+          fileData['chunk_size'] as int,
+          fileData['total_chunks'] as int,
+          cacheFile,
+        );
       }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      await Share.shareXFiles([XFile(decryptedFile.path)]);
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _isLoading = false;
-        });
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Share failed: $e"), backgroundColor: Colors.red),
+        );
       }
     }
   }
 
-  // =========================================================
-  // FULL FILE CHUNK DECRYPT (NO STREAM GUESSING)
-  // =========================================================
+  // ── Delete ────────────────────────────────────────────────────────────────
+  Future<void> _deleteFile(Map<String, dynamic> file) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Delete file?"),
+        content: Text('"${file['name']}" will be permanently deleted.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Delete", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await FileService().deleteFile(
+        messageId: file['message_id'],
+        supabaseId: file['id'],
+        onSuccess: (_) {
+          if (mounted) Navigator.pop(context, true); // signal refresh to parent
+        },
+        onError: (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(e), backgroundColor: Colors.red),
+            );
+          }
+        },
+      );
+    }
+  }
+
+  // ── Decrypt helper ────────────────────────────────────────────────────────
   Future<File> _decryptFullFile(
     List<int> encryptedBytes,
     String ivBase64,
     int chunkSize,
     int totalChunks,
-    File targetFile,   // cache destination passed in
+    File targetFile,
   ) async {
     final baseNonce = base64Decode(ivBase64);
     final secretKey = await VaultService().getSecretKey();
     final algorithm = AesGcm.with256bits();
-
     final output = BytesBuilder();
     int offset = 0;
 
@@ -165,9 +161,7 @@ class _FileViewerPageState extends State<FileViewerPage> {
       final int end = (i == totalChunks - 1)
           ? encryptedBytes.length
           : offset + chunkSize + 16;
-
       final chunk = encryptedBytes.sublist(offset, end);
-
       final macBytes = chunk.sublist(chunk.length - 16);
       final cipherText = chunk.sublist(0, chunk.length - 16);
 
@@ -181,7 +175,6 @@ class _FileViewerPageState extends State<FileViewerPage> {
         SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
         secretKey: secretKey,
       );
-
       output.add(decrypted);
       offset = end;
     }
@@ -190,73 +183,446 @@ class _FileViewerPageState extends State<FileViewerPage> {
     return targetFile;
   }
 
-  // =========================================================
-  // VIDEO PLAYER
-  // =========================================================
+  // ── 3-dot menu ────────────────────────────────────────────────────────────
+  void _showFileMenu(BuildContext context, Map<String, dynamic> file) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      isScrollControlled: true,
+      builder: (_) => _FileInfoSheet(
+        file: file,
+        onShare: () { Navigator.pop(context); _shareFile(file); },
+        onDownload: () {
+          Navigator.pop(context);
+          DownloadService.downloadFile(file['message_id'].toString(), file['name']);
+        },
+        onDelete: () { Navigator.pop(context); _deleteFile(file); },
+      ),
+    );
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    final hasMultiple = widget.files.length > 1;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.black.withOpacity(0.55),
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _currentFile['name'] ?? '',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (hasMultiple)
+              Text(
+                '${_currentIndex + 1} of ${widget.files.length}',
+                style: const TextStyle(color: Colors.white54, fontSize: 11),
+              ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.more_vert, color: Colors.white),
+            onPressed: () => _showFileMenu(context, _currentFile),
+          ),
+        ],
+      ),
+      body: PageView.builder(
+        controller: _pageController,
+        itemCount: widget.files.length,
+        onPageChanged: (index) => setState(() => _currentIndex = index),
+        itemBuilder: (context, index) => _SingleFileViewer(
+          key: ValueKey(widget.files[index]['message_id']),
+          file: widget.files[index],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _SingleFileViewer — one page inside the PageView
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SingleFileViewer extends StatefulWidget {
+  final Map<String, dynamic> file;
+  const _SingleFileViewer({super.key, required this.file});
+
+  @override
+  State<_SingleFileViewer> createState() => _SingleFileViewerState();
+}
+
+class _SingleFileViewerState extends State<_SingleFileViewer> {
+  bool _isLoading = true;
+  String _loadingStatus = 'Fetching metadata…';
+  String? _error;
+  Uint8List? _imageBytes;
+  VideoPlayerController? _videoController;
+  ChewieController? _chewieController;
+  File? _tempFile;
+
+  String get _messageId => widget.file['message_id'].toString();
+  String get _fileName => widget.file['name'] as String;
+
+  @override
+  void initState() {
+    super.initState();
+    _downloadAndDecrypt();
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    _chewieController?.dispose();
+    super.dispose();
+  }
+
+  // ─── Download + decrypt (with cache) ─────────────────────────────────────
+  Future<void> _downloadAndDecrypt() async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final cacheFile = File("${dir.path}/msg_${_messageId}_$_fileName");
+
+      if (cacheFile.existsSync()) {
+        if (mounted) setState(() => _loadingStatus = 'Opening from cache…');
+        await _openFile(cacheFile);
+        return;
+      }
+
+      // Fetch metadata
+      final supabase = Supabase.instance.client;
+      final fileData = await supabase
+          .from('files')
+          .select('iv, chunk_size, total_chunks')
+          .eq('message_id', _messageId)
+          .maybeSingle();
+
+      if (fileData == null) throw Exception("Metadata missing");
+
+      final ivBase64 = fileData['iv'] as String?;
+      final int chunkSize = fileData['chunk_size'] as int;
+      final int totalChunks = fileData['total_chunks'] as int;
+      if (ivBase64 == null) throw Exception("Missing IV");
+
+      // Download
+      if (mounted) setState(() => _loadingStatus = 'Downloading…');
+      final response = await http.get(
+        Uri.parse("${Env.backendBaseUrl}/api/file/$_messageId"),
+      );
+      if (response.statusCode != 200) throw Exception("Download failed");
+
+      // Decrypt
+      if (mounted) setState(() => _loadingStatus = 'Decrypting your data…');
+      final decryptedFile = await _decryptFullFile(
+        response.bodyBytes,
+        ivBase64,
+        chunkSize,
+        totalChunks,
+        cacheFile,
+      );
+
+      if (!mounted) return;
+      await _openFile(decryptedFile);
+    } catch (e) {
+      if (mounted) {
+        setState(() { _error = e.toString(); _isLoading = false; });
+      }
+    }
+  }
+
+  Future<void> _openFile(File file) async {
+    if (_isImage(_fileName)) {
+      final bytes = await file.readAsBytes();
+      if (mounted) setState(() { _imageBytes = bytes; _isLoading = false; });
+    } else if (_isVideo(_fileName)) {
+      if (mounted) setState(() => _loadingStatus = 'Preparing player…');
+      _tempFile = file;
+      await _initializeVideo();
+    } else {
+      if (mounted) setState(() => _loadingStatus = 'Opening file…');
+      _tempFile = file;
+      await OpenFilex.open(file.path);
+      if (mounted) Navigator.pop(context);
+    }
+  }
+
+  Future<File> _decryptFullFile(
+    List<int> encryptedBytes,
+    String ivBase64,
+    int chunkSize,
+    int totalChunks,
+    File targetFile,
+  ) async {
+    final baseNonce = base64Decode(ivBase64);
+    final secretKey = await VaultService().getSecretKey();
+    final algorithm = AesGcm.with256bits();
+    final output = BytesBuilder();
+    int offset = 0;
+
+    for (int i = 0; i < totalChunks; i++) {
+      final int end = (i == totalChunks - 1)
+          ? encryptedBytes.length
+          : offset + chunkSize + 16;
+      final chunk = encryptedBytes.sublist(offset, end);
+      final macBytes = chunk.sublist(chunk.length - 16);
+      final cipherText = chunk.sublist(0, chunk.length - 16);
+
+      final nonce = Uint8List.fromList(baseNonce);
+      nonce[8] = (i >> 24) & 0xFF;
+      nonce[9] = (i >> 16) & 0xFF;
+      nonce[10] = (i >> 8) & 0xFF;
+      nonce[11] = i & 0xFF;
+
+      final decrypted = await algorithm.decrypt(
+        SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
+        secretKey: secretKey,
+      );
+      output.add(decrypted);
+      offset = end;
+    }
+
+    await targetFile.writeAsBytes(output.toBytes());
+    return targetFile;
+  }
+
   Future<void> _initializeVideo() async {
     try {
       _videoController = VideoPlayerController.file(_tempFile!);
       await _videoController!.initialize();
-
       _chewieController = ChewieController(
         videoPlayerController: _videoController!,
         autoPlay: true,
         looping: false,
         aspectRatio: _videoController!.value.aspectRatio,
       );
-
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     } catch (_) {
-      setState(() {
-        _error = "Failed to load video";
-        _isLoading = false;
-      });
+      if (mounted) setState(() { _error = "Failed to load video"; _isLoading = false; });
     }
   }
 
-  // =========================================================
-  // FILE TYPE CHECK
-  // =========================================================
   bool _isImage(String name) =>
-      RegExp(r'\.(jpg|jpeg|png|gif|webp|bmp|heic)$',
-              caseSensitive: false)
-          .hasMatch(name);
+      RegExp(r'\.(jpg|jpeg|png|gif|webp|bmp|heic)$', caseSensitive: false).hasMatch(name);
 
   bool _isVideo(String name) =>
-      RegExp(r'\.(mp4|mov|avi|mkv|webm)$',
-              caseSensitive: false)
-          .hasMatch(name);
+      RegExp(r'\.(mp4|mov|avi|mkv|webm)$', caseSensitive: false).hasMatch(name);
 
-  // =========================================================
-  // UI
-  // =========================================================
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black.withOpacity(0.5),
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(widget.fileName,
-            style: const TextStyle(color: Colors.white)),
+    if (_isLoading) {
+      return Center(child: _DecryptingIndicator(status: _loadingStatus));
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.white54, size: 48),
+              const SizedBox(height: 16),
+              Text(_error!, style: const TextStyle(color: Colors.white70), textAlign: TextAlign.center),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_chewieController != null) return Chewie(controller: _chewieController!);
+    if (_imageBytes != null) {
+      return PhotoView(
+        imageProvider: MemoryImage(_imageBytes!),
+        minScale: PhotoViewComputedScale.contained,
+        maxScale: PhotoViewComputedScale.covered * 3,
+        backgroundDecoration: const BoxDecoration(color: Colors.black),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _FileInfoSheet — bottom sheet from 3-dot menu (dark theme for viewer)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FileInfoSheet extends StatelessWidget {
+  final Map<String, dynamic> file;
+  final VoidCallback onShare;
+  final VoidCallback onDownload;
+  final VoidCallback onDelete;
+
+  const _FileInfoSheet({
+    required this.file,
+    required this.onShare,
+    required this.onDownload,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final name = file['name'] ?? '-';
+    final type = (file['type'] ?? '-').toString().toUpperCase();
+    final size = _formatSize(file['size']);
+    final date = _formatDate(file['created_at']);
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Center(
+              child: Container(
+                width: 38, height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // File name row
+            Row(
+              children: [
+                const Icon(Icons.insert_drive_file_outlined, color: Colors.white60, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Info rows
+            _DarkInfoRow(icon: Icons.category_outlined,  label: 'Type',     value: type),
+            _DarkInfoRow(icon: Icons.storage_outlined,   label: 'Size',     value: size),
+            _DarkInfoRow(icon: Icons.schedule_outlined,  label: 'Uploaded', value: date),
+
+            const SizedBox(height: 20),
+            const Divider(color: Colors.white12),
+            const SizedBox(height: 8),
+
+            // Action tiles
+            _ActionTile(icon: Icons.share_outlined,    label: 'Share',    color: Colors.white,      onTap: onShare),
+            _ActionTile(icon: Icons.download_outlined, label: 'Download', color: Colors.white,      onTap: onDownload),
+            _ActionTile(icon: Icons.delete_outline,    label: 'Delete',   color: Colors.redAccent,  onTap: onDelete),
+            const SizedBox(height: 4),
+          ],
+        ),
       ),
-      body: Center(
-        child: _isLoading
-            ? _DecryptingIndicator(status: _loadingStatus)
-            : _error != null
-                ? Text(_error!,
-                    style: const TextStyle(color: Colors.white))
-                : _chewieController != null
-                    ? Chewie(controller: _chewieController!)
-                    : _imageBytes != null
-                        ? PhotoView(
-                            imageProvider: MemoryImage(_imageBytes!),
-                          )
-                        : const SizedBox.shrink(),
+    );
+  }
+
+  static String _formatSize(dynamic bytes) {
+    if (bytes == null) return '-';
+    final int b = bytes is int ? bytes : int.tryParse(bytes.toString()) ?? 0;
+    if (b < 1024) return '$b B';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} KB';
+    if (b < 1024 * 1024 * 1024) return '${(b / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(b / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  static String _formatDate(dynamic isoDate) {
+    if (isoDate == null) return '-';
+    try {
+      final dt = DateTime.parse(isoDate.toString()).toLocal();
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final period = dt.hour < 12 ? 'AM' : 'PM';
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '${months[dt.month - 1]} ${dt.day}, ${dt.year}  ·  $hour:$min $period';
+    } catch (_) { return '-'; }
+  }
+}
+
+class _DarkInfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _DarkInfoRow({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 17, color: Colors.white38),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 72,
+            child: Text(label, style: const TextStyle(fontSize: 13, color: Colors.white38)),
+          ),
+          Expanded(
+            child: Text(
+              value.isEmpty ? '-' : value,
+              style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
+
+class _ActionTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _ActionTile({required this.icon, required this.label, required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 16),
+            Text(label, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w500)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _DecryptingIndicator
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _DecryptingIndicator extends StatelessWidget {
   final String status;
@@ -270,10 +636,7 @@ class _DecryptingIndicator extends StatelessWidget {
         const SizedBox(
           width: 42,
           height: 42,
-          child: CircularProgressIndicator(
-            color: Colors.white,
-            strokeWidth: 3,
-          ),
+          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
         ),
         const SizedBox(height: 20),
         Row(

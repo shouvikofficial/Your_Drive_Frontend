@@ -264,57 +264,52 @@ class _FilesPageState extends State<FilesPage> {
  Future<void> _shareFile(Map<String, dynamic> file) async {
   try {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Preparing secure file...")),
+      const SnackBar(content: Text("Preparing secure file…"), duration: Duration(days: 1)),
     );
 
-    final supabase = Supabase.instance.client;
+    // ── Cache check: reuse already-decrypted file if available ────────────
+    final dir = await getTemporaryDirectory();
+    final cacheFile = File("${dir.path}/msg_${file['message_id']}_${file['name']}");
 
-    final fileData = await supabase
-        .from('files')
-        .select('iv, chunk_size, total_chunks')
-        .eq('message_id', file['message_id'])
-        .maybeSingle();
+    File decryptedFile;
+    if (cacheFile.existsSync()) {
+      decryptedFile = cacheFile;
+    } else {
+      final supabase = Supabase.instance.client;
+      final fileData = await supabase
+          .from('files')
+          .select('iv, chunk_size, total_chunks')
+          .eq('message_id', file['message_id'])
+          .maybeSingle();
 
-    if (fileData == null) throw Exception("Metadata missing");
+      if (fileData == null) throw Exception("Metadata missing");
 
-    final ivBase64 = fileData['iv'];
-    final int chunkSize = fileData['chunk_size'];
-    final int totalChunks = fileData['total_chunks'];
+      final url = "${Env.backendBaseUrl}/api/file/${file['message_id']}";
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200) throw Exception("Download failed");
 
-    final url =
-        "${Env.backendBaseUrl}/api/file/${file['message_id']}";
-
-    // 🔥 Step 1: Download FULL encrypted file
-    final response = await http.get(Uri.parse(url));
-    if (response.statusCode != 200) {
-      throw Exception("Download failed");
+      decryptedFile = await _decryptFullFile(
+        response.bodyBytes,
+        fileData['iv'],
+        fileData['chunk_size'],
+        fileData['total_chunks'],
+        cacheFile,   // write to same cache path the viewer uses
+      );
     }
 
-    final encryptedBytes = response.bodyBytes;
-
-    // 🔥 Step 2: Decrypt properly
-    final decryptedFile = await _decryptFullFile(
-      encryptedBytes,
-      ivBase64,
-      chunkSize,
-      totalChunks,
-      file['name'],
-    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
     final box = context.findRenderObject() as RenderBox?;
-
     await Share.shareXFiles(
       [XFile(decryptedFile.path)],
-      sharePositionOrigin:
-          box!.localToGlobal(Offset.zero) & box.size,
+      sharePositionOrigin: box != null ? box.localToGlobal(Offset.zero) & box.size : null,
     );
   } catch (e) {
     if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Share failed"),
-          backgroundColor: Colors.red,
-        ),
+        SnackBar(content: Text("Share failed: $e"), backgroundColor: Colors.red),
       );
     }
   }
@@ -325,7 +320,7 @@ Future<File> _decryptFullFile(
   String ivBase64,
   int chunkSize,
   int totalChunks,
-  String fileName,
+  File targetFile,   // caller provides the destination (shared cache path)
 ) async {
   final baseNonce = base64Decode(ivBase64);
   final secretKey = await VaultService().getSecretKey();
@@ -359,11 +354,9 @@ Future<File> _decryptFullFile(
     offset = end;
   }
 
-  final dir = await getTemporaryDirectory();
-  final file = File("${dir.path}/$fileName");
-  await file.writeAsBytes(output.toBytes());
+  await targetFile.writeAsBytes(output.toBytes());
 
-  return file;
+  return targetFile;
 }
 
 Future<Uint8List?> _getThumbnail(Map<String, dynamic> file) async {
@@ -558,16 +551,19 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
   }
 
   void _openViewer(Map<String, dynamic> file) {
+    final index = _files.indexOf(file);
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => FileViewerPage(
-          messageId: file['message_id'].toString(),
-          fileName: file['name'],
-          type: file['type'],
+          files: _files,
+          initialIndex: index < 0 ? 0 : index,
         ),
       ),
-    );
+    ).then((result) {
+      // Refresh list if a file was deleted from inside the viewer
+      if (result == true) _fetchFilesInitial();
+    });
   }
 
   void _showOptions(Map<String, dynamic> file) {
