@@ -13,6 +13,7 @@ import '../config/env.dart';
 import '../services/file_service.dart';
 import '../services/download_service.dart';
 import '../services/vault_service.dart';
+import '../services/thumbnail_cache_service.dart';
 import 'upload_page.dart';
 import 'file_viewer_page.dart';
 
@@ -38,12 +39,11 @@ class _FilesPageState extends State<FilesPage> {
   final Set<Map<String, dynamic>> selectedFiles = {};
   bool isSelectionMode = false;
 
-  // Thumbnail cache: keyed by file id so futures survive scroll recycling
-  final Map<dynamic, Future<Uint8List?>> _thumbnailCache = {};
-
   Future<Uint8List?> _getCachedThumbnail(Map<String, dynamic> file) {
-    final key = file['id'];
-    return _thumbnailCache.putIfAbsent(key, () => _getThumbnail(file));
+    return ThumbnailCacheService.instance.get(
+      file['id'],
+      () => _getThumbnail(file),
+    );
   }
 
   @override
@@ -76,7 +76,6 @@ class _FilesPageState extends State<FilesPage> {
 
       final response = await query.order('created_at', ascending: false);
       _files = List<Map<String, dynamic>>.from(response);
-      _thumbnailCache.clear();
       selectedFiles.clear();
       isSelectionMode = false;
     } catch (e) {
@@ -231,6 +230,7 @@ class _FilesPageState extends State<FilesPage> {
 
       try {
         for (var file in selectedFiles) {
+          ThumbnailCacheService.instance.evict(file['id']);
           await FileService().deleteFile(
             messageId: file['message_id'],
             supabaseId: file['id'],
@@ -603,7 +603,10 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
               FileService().deleteFile(
                 messageId: file['message_id'],
                 supabaseId: file['id'],
-                onSuccess: (_) => _fetchFilesInitial(),
+                onSuccess: (_) {
+                  ThumbnailCacheService.instance.evict(file['id']);
+                  _fetchFilesInitial();
+                },
                 onError: (e) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e))),
               );
             },
