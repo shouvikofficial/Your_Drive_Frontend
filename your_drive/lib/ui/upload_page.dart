@@ -43,19 +43,30 @@ Future<void> pickFiles() async {
 
   await Future.delayed(const Duration(milliseconds: 200));
 
-  // 🔹 Add ALL selected files to upload manager
+  // 🔹 Add ALL selected files to upload manager and track new items
+  final newItems = <UploadItem>[];
   for (final file in files) {
-    await manager.addSafFile(
+    final item = await manager.addSafFile(
       uri: file['uri'],
       name: file['name'],
       size: file['size'],
       folderId: widget.folderId,
       folderName: folderName,
     );
+    if (item != null) newItems.add(item);
   }
 
   if (mounted) {
     setState(() => _isPreparing = false);
+  }
+
+  // 🔹 Auto-start or append to running upload
+  if (newItems.isNotEmpty) {
+    if (manager.isUploading) {
+      manager.uploadAdditionalItems(newItems);
+    } else {
+      manager.startBatchUpload();
+    }
   }
 }
 
@@ -78,8 +89,7 @@ Future<void> pickFiles() async {
               title: const Text("Upload Files", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
               centerTitle: true,
               actions: [
-                // Disable add button while preparing
-                if (!manager.isUploading && manager.uploadQueue.isNotEmpty && !_isPreparing)
+                if (manager.uploadQueue.isNotEmpty && !_isPreparing)
                   IconButton(
                     icon: const Icon(Icons.add_circle_outline, color: AppColors.blue),
                     onPressed: pickFiles,

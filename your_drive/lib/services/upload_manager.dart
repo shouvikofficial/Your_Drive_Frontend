@@ -77,7 +77,7 @@ class UploadManager extends ChangeNotifier {
   DateTime _lastUiUpdate = DateTime.now();
 
   // ================= Add SAF File =================
-  Future<void> addSafFile({
+  Future<UploadItem> addSafFile({
     required String uri,
     required String name,
     required int size,
@@ -89,11 +89,10 @@ class UploadManager extends ChangeNotifier {
       currentFolderName = folderName;
     }
 
-    uploadQueue.add(
-      UploadItem(name: name, uri: uri, size: size),
-    );
-
+    final item = UploadItem(name: name, uri: uri, size: size);
+    uploadQueue.add(item);
     notifyListeners();
+    return item;
   }
   Future<Uint8List?> _generateSafThumbnail(
   String uri,
@@ -170,6 +169,26 @@ class UploadManager extends ChangeNotifier {
     isUploading = false;
     isUploadingNotifier.value = false;
     notifyListeners();
+  }
+
+  // ================= Upload Additional Items (while a batch already runs) =================
+  /// Uploads [items] in parallel batches without touching the [isUploading] flag.
+  /// Safe to call while [startBatchUpload] is running.
+  Future<void> uploadAdditionalItems(List<UploadItem> items) async {
+    if (items.isEmpty) return;
+    totalFilesToProcess += items.length;
+    notifyListeners();
+
+    const maxParallelFiles = 3;
+    for (int i = 0; i < items.length; i += maxParallelFiles) {
+      final batch = items.skip(i).take(maxParallelFiles);
+      await Future.wait(batch.map((item) async {
+        await Future.delayed(Duration(milliseconds: Random().nextInt(200)));
+        return _uploadSingleItemParallel(item);
+      }));
+      filesProcessed += batch.length;
+      notifyListeners();
+    }
   }
 
   // ================= Cancel Upload =================
