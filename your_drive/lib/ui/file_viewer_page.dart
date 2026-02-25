@@ -187,7 +187,7 @@ class _FileViewerPageState extends State<FileViewerPage> {
   void _showFileMenu(BuildContext context, Map<String, dynamic> file) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1C1C2E),
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -514,7 +514,7 @@ class _FileInfoSheet extends StatelessWidget {
               child: Container(
                 width: 38, height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.white24,
+                  color: Colors.grey[300],
                   borderRadius: BorderRadius.circular(10),
                 ),
               ),
@@ -524,13 +524,13 @@ class _FileInfoSheet extends StatelessWidget {
             // File name row
             Row(
               children: [
-                const Icon(Icons.insert_drive_file_outlined, color: Colors.white60, size: 22),
+                Icon(Icons.insert_drive_file_outlined, color: Colors.grey[500], size: 22),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     name,
                     style: const TextStyle(
-                      color: Colors.white,
+                      color: Colors.black,
                       fontWeight: FontWeight.bold,
                       fontSize: 15,
                     ),
@@ -548,13 +548,13 @@ class _FileInfoSheet extends StatelessWidget {
             _DarkInfoRow(icon: Icons.schedule_outlined,  label: 'Uploaded', value: date),
 
             const SizedBox(height: 20),
-            const Divider(color: Colors.white12),
+            const Divider(),
             const SizedBox(height: 8),
 
             // Action tiles
-            _ActionTile(icon: Icons.share_outlined,    label: 'Share',    color: Colors.white,      onTap: onShare),
-            _ActionTile(icon: Icons.download_outlined, label: 'Download', color: Colors.white,      onTap: onDownload),
-            _ActionTile(icon: Icons.delete_outline,    label: 'Delete',   color: Colors.redAccent,  onTap: onDelete),
+            _ActionTile(icon: Icons.share_outlined,    label: 'Share',    color: Colors.black87,    onTap: onShare),
+            _ActionTile(icon: Icons.download_outlined, label: 'Download', color: Colors.black87,    onTap: onDownload),
+            _ActionTile(icon: Icons.delete_outline,    label: 'Delete',   color: Colors.red,        onTap: onDelete),
             const SizedBox(height: 4),
           ],
         ),
@@ -596,16 +596,16 @@ class _DarkInfoRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Icon(icon, size: 17, color: Colors.white38),
+          Icon(icon, size: 17, color: Colors.grey[500]),
           const SizedBox(width: 12),
           SizedBox(
             width: 72,
-            child: Text(label, style: const TextStyle(fontSize: 13, color: Colors.white38)),
+            child: Text(label, style: TextStyle(fontSize: 13, color: Colors.grey[500])),
           ),
           Expanded(
             child: Text(
               value.isEmpty ? '-' : value,
-              style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500),
+              style: const TextStyle(fontSize: 13, color: Colors.black87, fontWeight: FontWeight.w500),
               overflow: TextOverflow.ellipsis,
               maxLines: 2,
             ),
