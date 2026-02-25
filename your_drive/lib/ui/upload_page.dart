@@ -253,69 +253,88 @@ Future<void> pickFiles() async {
     );
   }
 
+  String _formatSize(int? bytes) {
+    if (bytes == null || bytes == 0) return '';
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
   Widget _buildUploadTile(UploadItem item) {
     Color statusColor = Colors.grey;
-IconData statusIcon = Icons.circle_outlined;
-String statusText = "Waiting...";
-final pathForIcon =
-      item.file != null ? item.file!.path : (item.name ?? "file");
+    IconData statusIcon = Icons.circle_outlined;
+    String statusText = "Waiting";
+    bool isActive = false; // shows spinner
 
-switch (item.status) {
-  case 'preparing':
-    statusColor = Colors.blueGrey;
-    statusIcon = Icons.hourglass_bottom;
-    statusText = "Preparing...";
-    break;
+    final pathForIcon = item.file != null ? item.file!.path : (item.name ?? "file");
+    final fileName = item.file != null
+        ? item.file!.path.split(Platform.pathSeparator).last
+        : item.name ?? "file";
+    final sizeLabel = _formatSize(
+      item.size ?? (item.file != null ? item.file!.lengthSync() : null),
+    );
 
-  case 'initializing':
-    statusColor = Colors.indigo;
-    statusIcon = Icons.settings;
-    statusText = "Initializing...";
-    break;
+    switch (item.status) {
+      case 'preparing':
+        statusColor = Colors.blueGrey;
+        statusIcon = Icons.hourglass_bottom;
+        statusText = "Preparing";
+        isActive = true;
+        break;
+      case 'encrypting':
+        statusColor = const Color(0xFF00897B); // teal
+        statusIcon = Icons.lock_outline;
+        statusText = "Encrypting";
+        isActive = true;
+        break;
+      case 'initializing':
+        statusColor = Colors.indigo;
+        statusIcon = Icons.settings;
+        statusText = "Initializing";
+        isActive = true;
+        break;
+      case 'uploading':
+        statusColor = AppColors.blue;
+        statusIcon = Icons.upload;
+        statusText = "Uploading";
+        isActive = true;
+        break;
+      case 'finalizing':
+        statusColor = Colors.deepPurple;
+        statusIcon = Icons.cloud_done;
+        statusText = "Finalizing";
+        isActive = true;
+        break;
+      case 'done':
+        statusColor = Colors.green;
+        statusIcon = Icons.check_circle;
+        statusText = "Completed";
+        break;
+      case 'exists':
+        statusColor = Colors.orange;
+        statusIcon = Icons.cloud_done_outlined;
+        statusText = "Already in cloud";
+        break;
+      case 'no_internet':
+        statusColor = Colors.orange;
+        statusIcon = Icons.wifi_off_rounded;
+        statusText = "No Internet";
+        break;
+      case 'error':
+        statusColor = Colors.red;
+        statusIcon = Icons.error_outline;
+        statusText = "Failed";
+        break;
+      case 'cancelled':
+        statusColor = Colors.redAccent;
+        statusIcon = Icons.block;
+        statusText = "Cancelled";
+        break;
+    }
 
-  case 'uploading':
-    statusColor = AppColors.blue;
-    statusIcon = Icons.upload;
-    statusText = "Uploading...";
-    break;
-
-  case 'finalizing':
-    statusColor = Colors.deepPurple;
-    statusIcon = Icons.cloud_done;
-    statusText = "Finalizing...";
-    break;
-
-  case 'done':
-    statusColor = Colors.green;
-    statusIcon = Icons.check_circle;
-    statusText = "Completed";
-    break;
-
-  case 'exists':
-    statusColor = Colors.orange;
-    statusIcon = Icons.cloud_done_outlined;
-    statusText = "Already exists in cloud";
-    break;
-
-  case 'no_internet':
-    statusColor = Colors.orange;
-    statusIcon = Icons.wifi_off_rounded;
-    statusText = "No Internet";
-    break;
-
-  case 'error':
-    statusColor = Colors.red;
-    statusIcon = Icons.error_outline;
-    statusText = "Failed";
-    break;
-
-  case 'cancelled':
-    statusColor = Colors.redAccent;
-    statusIcon = Icons.block;
-    statusText = "Cancelled";
-    break;
-}
-
+    final bool isUploading = item.status == 'uploading';
+    final int pct = (item.progress * 100).round();
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -324,10 +343,11 @@ switch (item.status) {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4))
-        ]
+        ],
       ),
       child: Row(
         children: [
+          // File type icon
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
@@ -335,23 +355,62 @@ switch (item.status) {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(_getIconForFile(pathForIcon), color: AppColors.blue, size: 24),
-
           ),
           const SizedBox(width: 12),
+
+          // Body
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Filename
                 Text(
-                  (item.file != null
-    ? item.file!.path.split(Platform.pathSeparator).last
-    : item.name ?? "file"),
-
+                  fileName,
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 6),
-                if (item.status == 'uploading')
+                const SizedBox(height: 5),
+
+                // Status row
+                Row(
+                  children: [
+                    // Spinner or icon
+                    if (isActive)
+                      SizedBox(
+                        width: 11, height: 11,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: statusColor,
+                        ),
+                      )
+                    else
+                      Icon(statusIcon, size: 13, color: statusColor),
+                    const SizedBox(width: 5),
+
+                    // Status text + %
+                    Text(
+                      isUploading ? 'Uploading · $pct%' : statusText,
+                      style: TextStyle(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600),
+                    ),
+
+                    // File size — flexible so it never overflows
+                    if (sizeLabel.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          '· $sizeLabel',
+                          style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+
+                // Progress bar (uploading only)
+                if (isUploading) ...[
+                  const SizedBox(height: 5),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
                     child: LinearProgressIndicator(
@@ -360,17 +419,15 @@ switch (item.status) {
                       backgroundColor: Colors.grey[200],
                       color: AppColors.blue,
                     ),
-                  )
-                else
-                  Text(
-                    statusText,
-                    style: TextStyle(fontSize: 12, color: statusColor, fontWeight: FontWeight.w500),
                   ),
+                ],
               ],
             ),
           ),
           const SizedBox(width: 12),
-          if (item.status == 'uploading')
+
+          // Right action
+          if (isUploading)
             IconButton(
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
