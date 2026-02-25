@@ -246,12 +246,34 @@ class _FileViewerPageState extends State<FileViewerPage> {
       ),
       body: PageView.builder(
         controller: _pageController,
+        physics: const BouncingScrollPhysics(),
         itemCount: widget.files.length,
         onPageChanged: (index) => setState(() => _currentIndex = index),
-        itemBuilder: (context, index) => _SingleFileViewer(
-          key: ValueKey(widget.files[index]['message_id']),
-          file: widget.files[index],
-        ),
+        itemBuilder: (context, index) {
+          return AnimatedBuilder(
+            animation: _pageController,
+            child: _SingleFileViewer(
+              key: ValueKey(widget.files[index]['message_id']),
+              file: widget.files[index],
+            ),
+            builder: (context, child) {
+              double offset = 0.0;
+              if (_pageController.position.haveDimensions) {
+                offset = (index - (_pageController.page ?? index.toDouble()))
+                    .clamp(-1.0, 1.0);
+              }
+              final scale   = 1.0 - 0.06 * offset.abs();
+              final opacity = 1.0 - 0.35 * offset.abs();
+              return Transform.scale(
+                scale: scale,
+                child: Opacity(
+                  opacity: opacity.clamp(0.0, 1.0),
+                  child: child,
+                ),
+              );
+            },
+          );
+        },
       ),
     );
   }
