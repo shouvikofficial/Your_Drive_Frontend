@@ -12,6 +12,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:convert/convert.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/saf_service.dart';
 import '../config/env.dart';
@@ -39,15 +40,44 @@ class UploadItem {
   dio.CancelToken? cancelToken;
 
   UploadItem({
+    String? id,
     this.file,
     this.name,
     this.uri,
     this.size,
     this.progress = 0.0,
     this.status = 'waiting',
-  }) : id =
-            DateTime.now().microsecondsSinceEpoch.toString() +
-            Random().nextInt(1000).toString();
+    this.uploadId,
+  }) : id = id ??
+            (DateTime.now().microsecondsSinceEpoch.toString() +
+            Random().nextInt(1000).toString());
+
+  /// Serialize for disk persistence
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'uri': uri,
+    'size': size,
+    'filePath': file?.path,
+    'progress': progress,
+    'status': status,
+    'uploadId': uploadId,
+  };
+
+  /// Restore from disk
+  factory UploadItem.fromJson(Map<String, dynamic> json) {
+    final path = json['filePath'] as String?;
+    return UploadItem(
+      id: json['id'] as String?,
+      file: (path != null && File(path).existsSync()) ? File(path) : null,
+      name: json['name'] as String?,
+      uri: json['uri'] as String?,
+      size: json['size'] as int?,
+      progress: (json['progress'] as num?)?.toDouble() ?? 0.0,
+      status: json['status'] as String? ?? 'waiting',
+      uploadId: json['uploadId'] as String?,
+    );
+  }
 }
 
 // ================= Upload Manager =================
@@ -76,6 +106,96 @@ class UploadManager extends ChangeNotifier {
 
   DateTime _lastUiUpdate = DateTime.now();
 
+  static const String _queueKey = 'upload_queue';
+  static const String _folderIdKey = 'upload_folder_id';
+  static const String _folderNameKey = 'upload_folder_name';
+
+  // ================= Queue Persistence =================
+  Future<void> _persistQueue() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = uploadQueue
+          .where((i) => !['done', 'exists', 'cancelled'].contains(i.status))
+          .map((i) => jsonEncode(i.toJson()))
+          .toList();
+      await prefs.setStringList(_queueKey, jsonList);
+      await prefs.setString(_folderNameKey, currentFolderName);
+      if (currentFolderId != null) {
+        await prefs.setString(_folderIdKey, currentFolderId!);
+      }
+    } catch (e) {
+      debugPrint('[UploadManager] Persist error: $e');
+    }
+  }
+
+  /// Restore queue from disk. Call once at app startup.
+  Future<void> restoreQueue() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonList = prefs.getStringList(_queueKey);
+      if (jsonList == null || jsonList.isEmpty) return;
+
+      currentFolderName = prefs.getString(_folderNameKey) ?? 'My Drive';
+      currentFolderId = prefs.getString(_folderIdKey);
+
+      final restored = <UploadItem>[];
+      for (final raw in jsonList) {
+        try {
+          final map = jsonDecode(raw) as Map<String, dynamic>;
+          final item = UploadItem.fromJson(map);
+
+          // Mark items that were actively processing as interrupted
+          if (['uploading', 'preparing', 'encrypting', 'initializing', 'finalizing']
+              .contains(item.status)) {
+            item.status = 'interrupted';
+            item.progress = 0.0;
+            // Clear stale upload_id so a fresh one is generated on retry
+            if (item.uploadId != null) {
+              await ResumeStore.clear(item.uploadId!);
+            }
+            item.uploadId = null;
+          }
+          // Skip items that can't be re-read (no URI and no valid File)
+          if (item.uri == null && item.file == null) continue;
+
+          restored.add(item);
+        } catch (_) {}
+      }
+
+      if (restored.isNotEmpty) {
+        uploadQueue = restored;
+        debugPrint('[UploadManager] Restored ${restored.length} items from disk');
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[UploadManager] Restore error: $e');
+    }
+  }
+
+  /// Resume all interrupted/waiting/error items
+  Future<void> resumeInterrupted() async {
+    final resumable = uploadQueue
+        .where((i) => ['interrupted', 'waiting', 'error', 'no_internet'].contains(i.status))
+        .toList();
+    if (resumable.isEmpty) return;
+
+    // Reset interrupted items to waiting
+    for (final item in resumable) {
+      item.status = 'waiting';
+      item.progress = 0.0;
+      item.uploadId = null; // fresh upload
+    }
+    notifyListeners();
+    await _persistQueue();
+
+    // Start upload
+    if (!isUploading) {
+      startBatchUpload();
+    } else {
+      uploadAdditionalItems(resumable);
+    }
+  }
+
   // ================= Add SAF File =================
   Future<UploadItem> addSafFile({
     required String uri,
@@ -92,6 +212,7 @@ class UploadManager extends ChangeNotifier {
     final item = UploadItem(name: name, uri: uri, size: size);
     uploadQueue.add(item);
     notifyListeners();
+    _persistQueue();
     return item;
   }
   Future<Uint8List?> _generateSafThumbnail(
@@ -169,6 +290,7 @@ class UploadManager extends ChangeNotifier {
     isUploading = false;
     isUploadingNotifier.value = false;
     notifyListeners();
+    _persistQueue(); // save final state
   }
 
   // ================= Upload Additional Items (while a batch already runs) =================
@@ -211,6 +333,7 @@ class UploadManager extends ChangeNotifier {
   void removeFile(UploadItem item) {
     uploadQueue.remove(item);
     notifyListeners();
+    _persistQueue();
   }
 
   void clearCompleted() {
@@ -218,6 +341,7 @@ class UploadManager extends ChangeNotifier {
       (item) => ['done', 'exists', 'cancelled', 'error'].contains(item.status),
     );
     notifyListeners();
+    _persistQueue();
   }
 
   // ================= Secure Nonce =================
@@ -512,6 +636,7 @@ if (thumbnailFuture != null) {
       item.progress = 1.0;
 item.status = 'done';
 notifyListeners();
+_persistQueue();
 
 
 
@@ -524,6 +649,7 @@ notifyListeners();
       item.status = _isNoInternetError(e) ? 'no_internet' : 'error';
     } finally {
       notifyListeners();
+      _persistQueue();
     }
   }
 

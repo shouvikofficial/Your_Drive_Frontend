@@ -1,5 +1,6 @@
 package com.example.your_drive
 
+import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +25,17 @@ class MainActivity : FlutterFragmentActivity() {
             }
 
             try {
+                // 🔒 Take persistent read permission so URIs survive app restart
+                for (uri in uris) {
+                    try {
+                        contentResolver.takePersistableUriPermission(
+                            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    } catch (_: Exception) {
+                        // Some providers may not support persistent permissions — continue anyway
+                    }
+                }
+
                 val files = uris.map { uri ->
                     hashMapOf(
                         "uri" to uri.toString(),

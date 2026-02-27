@@ -31,6 +31,10 @@ class _UploadPageState extends State<UploadPage> {
     if (manager.currentFolderName != "My Drive") {
       folderName = manager.currentFolderName;
     }
+    // Restore any interrupted uploads from previous session
+    if (manager.uploadQueue.isEmpty) {
+      manager.restoreQueue();
+    }
   }
 
 Future<void> pickFiles() async {
@@ -184,6 +188,9 @@ Future<void> pickFiles() async {
                           final allDone = manager.uploadQueue.every((item) => 
                             item.status == 'done' || item.status == 'exists' || item.status == 'cancelled'
                           );
+                          final hasInterrupted = manager.uploadQueue.any((item) =>
+                            item.status == 'interrupted'
+                          );
                           
                           return SizedBox(
                             width: double.infinity,
@@ -196,9 +203,11 @@ Future<void> pickFiles() async {
                                           manager.clearCompleted();
                                           Navigator.pop(context);
                                         } 
-                                      : manager.startBatchUpload),
+                                      : hasInterrupted
+                                        ? manager.resumeInterrupted
+                                        : manager.startBatchUpload),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: allDone ? Colors.green : AppColors.blue,
+                                backgroundColor: allDone ? Colors.green : (hasInterrupted ? Colors.orange : AppColors.blue),
                                 foregroundColor: Colors.white,
                                 elevation: 0,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -208,7 +217,9 @@ Future<void> pickFiles() async {
                                   : Text(
                                       allDone 
                                         ? "Done" 
-                                        : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet').length} Files",
+                                        : hasInterrupted
+                                          ? "Resume ${manager.uploadQueue.where((item) => item.status == 'interrupted').length} Interrupted"
+                                          : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet').length} Files",
                                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)
                                     ),
                             ),
@@ -341,6 +352,11 @@ Future<void> pickFiles() async {
         statusIcon = Icons.block;
         statusText = "Cancelled";
         break;
+      case 'interrupted':
+        statusColor = Colors.orange;
+        statusIcon = Icons.pause_circle_filled;
+        statusText = "Interrupted";
+        break;
     }
 
     final bool isUploading = item.status == 'uploading';
@@ -444,7 +460,7 @@ Future<void> pickFiles() async {
               icon: const Icon(Icons.cancel, size: 22, color: Colors.redAccent),
               onPressed: () => manager.cancelUpload(item),
             )
-          else if (item.status == 'waiting' && !manager.isUploading)
+          else if ((item.status == 'waiting' || item.status == 'interrupted') && !manager.isUploading)
             IconButton(
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),

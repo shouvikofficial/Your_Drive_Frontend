@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 // ✅ IMPORTS
 import 'config/env.dart';
 import 'services/backup_service.dart';
+import 'services/upload_manager.dart';
 import 'auth/login_page.dart';
 import 'ui/onboarding_page.dart';
 import 'pages/vault_login_page.dart';
@@ -60,6 +61,13 @@ Future<void> main() async {
     await BackupService().initBackgroundService();
   } catch (e) {
     print("Backup Service Error: $e");
+  }
+
+  // ✅ RESTORE UPLOAD QUEUE (survives app restart)
+  try {
+    await UploadManager().restoreQueue();
+  } catch (e) {
+    print("Upload Queue Restore Error: $e");
   }
 
   // ✅ ONBOARDING CHECK
