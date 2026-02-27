@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../theme/app_colors.dart';
+import '../pages/vault_login_page.dart';
 
 class SignupPage extends StatefulWidget {
   const SignupPage({super.key});
@@ -131,70 +132,86 @@ Future<void> _createSession() async {
   
   // ================= GOOGLE SIGNUP (v6) =================
   Future<void> googleSignup() async {
-    if (!Platform.isAndroid && !Platform.isIOS) {
-      showMsg("Google Signup works only on Android/iOS.");
+  if (!Platform.isAndroid && !Platform.isIOS) {
+    showMsg("Google Signup works only on Android/iOS.");
+    return;
+  }
+
+  setState(() => loading = true);
+
+  try {
+    const webClientId =
+        '425409648184-g356qa4l1oqnemgecpn2r8aun64k2rmq.apps.googleusercontent.com';
+
+    final GoogleSignIn googleSignIn = GoogleSignIn(
+      serverClientId: webClientId,
+      scopes: ['email', 'profile'],
+    );
+
+    await googleSignIn.signOut();
+
+    final GoogleSignInAccount? googleUser =
+        await googleSignIn.signIn();
+
+    if (googleUser == null) {
+      setState(() => loading = false);
       return;
     }
 
-    setState(() => loading = true);
+    final googleAuth = await googleUser.authentication;
 
-    try {
-      const webClientId =
-          '425409648184-g356qa4l1oqnemgecpn2r8aun64k2rmq.apps.googleusercontent.com';
+    final accessToken = googleAuth.accessToken;
+    final idToken = googleAuth.idToken;
 
-      final GoogleSignIn googleSignIn = GoogleSignIn(
-        serverClientId: webClientId,
-      );
-
-      // 🛑 FIX: Force account picker by signing out first
-      await googleSignIn.signOut();
-
-      final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
-
-      // user cancelled
-      if (googleUser == null) {
-        setState(() => loading = false);
-        return;
-      }
-
-      final GoogleSignInAuthentication googleAuth =
-          await googleUser.authentication;
-
-      final accessToken = googleAuth.accessToken;
-      final idToken = googleAuth.idToken;
-
-      if (accessToken == null || idToken == null) {
-        throw "Missing Google Auth Token";
-      }
-
-      // Sign in / Sign up via Supabase
-      final res = await Supabase.instance.client.auth.signInWithIdToken(
-        provider: OAuthProvider.google,
-        idToken: idToken,
-        accessToken: accessToken,
-      );
-      
-
-
-      final user = res.user;
-      if (user != null) {
-        // create profile if not exists
-        await Supabase.instance.client.from('profiles').upsert({
-          'id': user.id,
-          'name': user.userMetadata?['full_name'] ?? 'Google User',
-        });
-        await _createSession();
-      }
-
-      if (!mounted) return;
-
-      Navigator.pop(context);
-    } catch (e) {
-      showMsg("Google Sign in failed: $e");
-    } finally {
-      if (mounted) setState(() => loading = false);
+    if (accessToken == null || idToken == null) {
+      throw "Missing Google Auth Token";
     }
+
+    final supabase = Supabase.instance.client;
+
+    // 🔐 Sign in (auto creates auth.users if new)
+    final res = await supabase.auth.signInWithIdToken(
+      provider: OAuthProvider.google,
+      idToken: idToken,
+      accessToken: accessToken,
+    );
+
+    final user = res.user;
+    if (user == null) throw "Authentication failed";
+
+    // 🔎 Check if profile exists
+    final profile = await supabase
+        .from('profiles')
+        .select()
+        .eq('id', user.id)
+        .maybeSingle();
+
+    // 🆕 If new → create profile
+    if (profile == null) {
+      await supabase.from('profiles').insert({
+        'id': user.id,
+        'name': user.userMetadata?['full_name'] ?? 'Google User',
+        'email': user.email,
+      });
+    }
+
+    // ✅ Create session
+    await _createSession();
+
+    if (!mounted) return;
+
+    // 🔥 Go directly to next page
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const VaultLoginPage()),
+    );
+
+  } catch (e) {
+    showMsg("Unable to sign in with Google. Please try again.");
+  } finally {
+    if (mounted) setState(() => loading = false);
   }
+}
 
   
 
