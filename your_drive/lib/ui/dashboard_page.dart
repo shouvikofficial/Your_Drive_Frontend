@@ -312,9 +312,12 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
  Widget _buildHeader() {
   final manager = UploadManager();
 
-  return ValueListenableBuilder<bool>(
-    valueListenable: manager.isUploadingNotifier,
-    builder: (context, isUploading, _) {
+  return ListenableBuilder(
+    listenable: manager,
+    builder: (context, _) {
+      final isUploading = manager.isUploadingNotifier.value;
+      final hasPaused = manager.uploadQueue.any((i) => i.status == 'paused');
+      final pausedCount = manager.uploadQueue.where((i) => i.status == 'paused').length;
 
       return Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -343,6 +346,7 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
             ],
           ),
 
+          // Show uploading indicator
           if (isUploading)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
@@ -378,6 +382,48 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
                         "Uploading...",
                         style: TextStyle(
                           color: AppColors.blue,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          // Show paused indicator when not uploading but has paused items
+          else if (hasPaused)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const UploadPage(),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.pause_circle_filled,
+                        size: 16,
+                        color: Colors.orange,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        "$pausedCount Paused",
+                        style: const TextStyle(
+                          color: Colors.orange,
                           fontWeight: FontWeight.w700,
                           fontSize: 13,
                         ),

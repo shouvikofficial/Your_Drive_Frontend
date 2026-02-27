@@ -39,6 +39,12 @@ class UploadItem {
   String? uploadId;
   dio.CancelToken? cancelToken;
 
+  // Resume fields — persisted so we can continue from exact chunk
+  String? baseNonceB64;   // base64-encoded baseNonce
+  String? fileHash;
+  int? chunkSize;
+  int? totalChunks;
+
   UploadItem({
     String? id,
     this.file,
@@ -48,6 +54,10 @@ class UploadItem {
     this.progress = 0.0,
     this.status = 'waiting',
     this.uploadId,
+    this.baseNonceB64,
+    this.fileHash,
+    this.chunkSize,
+    this.totalChunks,
   }) : id = id ??
             (DateTime.now().microsecondsSinceEpoch.toString() +
             Random().nextInt(1000).toString());
@@ -62,6 +72,10 @@ class UploadItem {
     'progress': progress,
     'status': status,
     'uploadId': uploadId,
+    'baseNonceB64': baseNonceB64,
+    'fileHash': fileHash,
+    'chunkSize': chunkSize,
+    'totalChunks': totalChunks,
   };
 
   /// Restore from disk
@@ -76,6 +90,10 @@ class UploadItem {
       progress: (json['progress'] as num?)?.toDouble() ?? 0.0,
       status: json['status'] as String? ?? 'waiting',
       uploadId: json['uploadId'] as String?,
+      baseNonceB64: json['baseNonceB64'] as String?,
+      fileHash: json['fileHash'] as String?,
+      chunkSize: json['chunkSize'] as int?,
+      totalChunks: json['totalChunks'] as int?,
     );
   }
 }
@@ -89,6 +107,7 @@ class UploadManager extends ChangeNotifier {
   List<UploadItem> uploadQueue = [];
   bool isUploading = false;
   final ValueNotifier<bool> isUploadingNotifier = ValueNotifier(false);
+  final ValueNotifier<bool> hasPausedNotifier = ValueNotifier(false);
 
   /// UI progress tracking
   int filesProcessed = 0;
@@ -123,8 +142,16 @@ class UploadManager extends ChangeNotifier {
       if (currentFolderId != null) {
         await prefs.setString(_folderIdKey, currentFolderId!);
       }
+      _updatePausedNotifier();
     } catch (e) {
       debugPrint('[UploadManager] Persist error: $e');
+    }
+  }
+
+  void _updatePausedNotifier() {
+    final hasPaused = uploadQueue.any((i) => i.status == 'paused');
+    if (hasPausedNotifier.value != hasPaused) {
+      hasPausedNotifier.value = hasPaused;
     }
   }
 
@@ -144,16 +171,15 @@ class UploadManager extends ChangeNotifier {
           final map = jsonDecode(raw) as Map<String, dynamic>;
           final item = UploadItem.fromJson(map);
 
-          // Mark items that were actively processing as interrupted
+          // Mark items that were actively processing as paused
+          // Keep uploadId + resume fields intact for true resume!
           if (['uploading', 'preparing', 'encrypting', 'initializing', 'finalizing']
               .contains(item.status)) {
-            item.status = 'interrupted';
-            item.progress = 0.0;
-            // Clear stale upload_id so a fresh one is generated on retry
-            if (item.uploadId != null) {
-              await ResumeStore.clear(item.uploadId!);
-            }
-            item.uploadId = null;
+            item.status = 'paused';
+          }
+          // Also treat waiting items as paused (they were queued but not started)
+          if (item.status == 'waiting') {
+            item.status = 'paused';
           }
           // Skip items that can't be re-read (no URI and no valid File)
           if (item.uri == null && item.file == null) continue;
@@ -164,28 +190,28 @@ class UploadManager extends ChangeNotifier {
 
       if (restored.isNotEmpty) {
         uploadQueue = restored;
-        debugPrint('[UploadManager] Restored ${restored.length} items from disk');
+        debugPrint('[UploadManager] Restored ${restored.length} items from disk (paused)');
         notifyListeners();
+        _updatePausedNotifier();
       }
     } catch (e) {
       debugPrint('[UploadManager] Restore error: $e');
     }
   }
 
-  /// Resume all interrupted/waiting/error items
-  Future<void> resumeInterrupted() async {
+  /// Resume all paused/interrupted/waiting/error items
+  Future<void> resumeAll() async {
     final resumable = uploadQueue
-        .where((i) => ['interrupted', 'waiting', 'error', 'no_internet'].contains(i.status))
+        .where((i) => ['paused', 'interrupted', 'waiting', 'error', 'no_internet'].contains(i.status))
         .toList();
     if (resumable.isEmpty) return;
 
-    // Reset interrupted items to waiting
+    // Reset status to waiting so the upload engine picks them up
     for (final item in resumable) {
       item.status = 'waiting';
-      item.progress = 0.0;
-      item.uploadId = null; // fresh upload
     }
     notifyListeners();
+    _updatePausedNotifier();
     await _persistQueue();
 
     // Start upload
@@ -271,6 +297,7 @@ class UploadManager extends ChangeNotifier {
 
     totalFilesToProcess = pendingFiles.length;
     notifyListeners();
+    _updatePausedNotifier();
 
     const maxParallelFiles = 3;
 
@@ -344,6 +371,17 @@ class UploadManager extends ChangeNotifier {
     _persistQueue();
   }
 
+  void clearAll() {
+    for (final item in uploadQueue) {
+      if (item.uploadId != null) {
+        ResumeStore.clear(item.uploadId!);
+      }
+    }
+    uploadQueue.clear();
+    notifyListeners();
+    _persistQueue();
+  }
+
   // ================= Secure Nonce =================
   List<int> _buildChunkNonce(List<int> baseNonce, int index) {
     final nonce = List<int>.from(baseNonce);
@@ -394,74 +432,77 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
 
     if (fileSize == 0) throw Exception("Empty file");
 
-    // 🔥 START THUMBNAIL IN PARALLEL (DO NOT AWAIT)
+    // Check if this is a RESUME (has saved encryption context from previous run)
+    final bool isResume = item.baseNonceB64 != null &&
+        item.fileHash != null &&
+        item.uploadId != null &&
+        item.chunkSize != null &&
+        item.totalChunks != null;
+
+    // 🔥 START THUMBNAIL IN PARALLEL (DO NOT AWAIT) — skip on resume
     Future<Uint8List?>? thumbnailFuture;
     final fileType = _getFileType(fileName);
 
-    if (item.file != null) {
-  if (fileType == 'image') {
-    thumbnailFuture =
-        generateImageThumbnail(item.file!.path);
-  } else if (fileType == 'video') {
-    thumbnailFuture =
-        generateVideoThumbnail(item.file!.path);
-  }
-} else if (item.uri != null) {
-  // 🔥 SAF support
-  thumbnailFuture =
-      _generateSafThumbnail(item.uri!, fileName);
-}
+    if (!isResume) {
+      if (item.file != null) {
+        if (fileType == 'image') {
+          thumbnailFuture = generateImageThumbnail(item.file!.path);
+        } else if (fileType == 'video') {
+          thumbnailFuture = generateVideoThumbnail(item.file!.path);
+        }
+      } else if (item.uri != null) {
+        thumbnailFuture = _generateSafThumbnail(item.uri!, fileName);
+      }
+    }
 
-    // ---------- HASH ----------
+    // ---------- HASH (skip on resume) ----------
     String fileHash;
 
-    if (item.file != null) {
-      // 🔥 Hash normal file in isolate
-      fileHash = await compute(
-        hashFileInIsolate,
-        item.file!.path,
-      );
+    if (isResume) {
+      fileHash = item.fileHash!;
+      debugPrint('[UploadManager] Resuming ${item.name} — skipping hash/dedup');
     } else {
-      // 🔥 Hash SAF in isolate (Lag Fixed)
-      final rootToken = RootIsolateToken.instance;
-      if (rootToken == null) {
-        throw Exception("Cannot get RootIsolateToken");
+      if (item.file != null) {
+        fileHash = await compute(hashFileInIsolate, item.file!.path);
+      } else {
+        final rootToken = RootIsolateToken.instance;
+        if (rootToken == null) throw Exception("Cannot get RootIsolateToken");
+        fileHash = await compute(
+          hashSafInIsolate,
+          SafHashParams(token: rootToken, uri: item.uri!, fileSize: fileSize),
+        );
       }
 
-      fileHash = await compute(
-        hashSafInIsolate,
-        SafHashParams(
-          token: rootToken,
-          uri: item.uri!,
-          fileSize: fileSize,
-        ),
-      );
+      // ---------- Dedup (skip on resume) ----------
+      final existing = await supabase
+          .from('files')
+          .select()
+          .eq('hash', fileHash)
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      if (existing != null) {
+        item.progress = 1.0;
+        item.status = 'exists';
+        notifyListeners();
+        return;
+      }
     }
 
-    // ---------- Dedup ----------
-    final existing = await supabase
-        .from('files')
-        .select()
-        .eq('hash', fileHash)
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-    if (existing != null) {
-      item.progress = 1.0;
-      item.status = 'exists';
-      notifyListeners();
-      return;
-    }
-
-    // 🔥 CONTINUE YOUR ENCRYPTION + UPLOAD BELOW THIS
-
-      // ---------- Encryption ----------
+    // ---------- Encryption context ----------
       item.status = 'encrypting';
       notifyListeners();
       
       final key = await VaultService().getSecretKey();
-      final baseNonce = VaultService().generateNonce();
-      final keyBytes = await key.extractBytes(); // Extract once
+      final keyBytes = await key.extractBytes();
+
+      // Reuse saved nonce on resume, or generate fresh one
+      List<int> baseNonce;
+      if (isResume) {
+        baseNonce = base64Decode(item.baseNonceB64!);
+      } else {
+        baseNonce = VaultService().generateNonce();
+      }
 
       // ---------- Strategy ----------
       final isWifi = await NetworkSpeed.isWifi();
@@ -472,9 +513,16 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
       int uploadedChunks = ResumeStore.getProgress(item.uploadId!);
 
       // ---------- Chunk setup ----------
-      final chunkSize = strategy.chunkSize;
+      final chunkSize = isResume ? item.chunkSize! : strategy.chunkSize;
       final maxParallel = strategy.parallelChunks;
-      final totalChunks = (fileSize / chunkSize).ceil();
+      final totalChunks = isResume ? item.totalChunks! : (fileSize / chunkSize).ceil();
+
+      // Save resume context on item for persistence
+      item.baseNonceB64 = base64Encode(baseNonce);
+      item.fileHash = fileHash;
+      item.chunkSize = chunkSize;
+      item.totalChunks = totalChunks;
+      await _persistQueue(); // Save so resume works if app dies during upload
 
       RandomAccessFile? raf;
       if (item.file != null) {
@@ -482,9 +530,12 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
       }
 
       item.status = 'uploading';
+      item.progress = totalChunks > 0 ? uploadedChunks / totalChunks : 0.0;
       notifyListeners();
 
-      String? realMessageIdGlobal; // capture message_id from last chunk
+      debugPrint('[UploadManager] ${isResume ? "RESUMING" : "Starting"} ${item.name}: chunk $uploadedChunks/$totalChunks');
+
+      String? realMessageIdGlobal;
 
       Future<void> processChunk(int index) async {
         if (item.status == 'cancelled') return;
@@ -561,7 +612,7 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
               fileSize,
               fileHash,
               base64Encode(baseNonce),
-              strategy.chunkSize,
+              chunkSize,
               totalChunks,
             );
           }
@@ -633,6 +684,10 @@ if (thumbnailFuture != null) {
       
       // Cleanup
       await ResumeStore.clear(item.uploadId!);
+      item.baseNonceB64 = null;
+      item.fileHash = null;
+      item.chunkSize = null;
+      item.totalChunks = null;
       item.progress = 1.0;
 item.status = 'done';
 notifyListeners();

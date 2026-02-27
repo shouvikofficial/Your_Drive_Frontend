@@ -188,14 +188,14 @@ Future<void> pickFiles() async {
                           final allDone = manager.uploadQueue.every((item) => 
                             item.status == 'done' || item.status == 'exists' || item.status == 'cancelled'
                           );
-                          final hasInterrupted = manager.uploadQueue.any((item) =>
-                            item.status == 'interrupted'
+                          final hasPaused = manager.uploadQueue.any((item) =>
+                            item.status == 'paused'
                           );
                           
                           return SizedBox(
                             width: double.infinity,
                             height: 56,
-                            child: ElevatedButton(
+                            child: ElevatedButton.icon(
                               onPressed: manager.isUploading 
                                   ? () => Navigator.pop(context) 
                                   : (allDone 
@@ -203,25 +203,29 @@ Future<void> pickFiles() async {
                                           manager.clearCompleted();
                                           Navigator.pop(context);
                                         } 
-                                      : hasInterrupted
-                                        ? manager.resumeInterrupted
+                                      : hasPaused
+                                        ? manager.resumeAll
                                         : manager.startBatchUpload),
+                              icon: Icon(
+                                allDone ? Icons.check : (hasPaused ? Icons.play_arrow_rounded : Icons.cloud_upload_rounded),
+                                size: 22,
+                              ),
+                              label: Text(
+                                manager.isUploading 
+                                    ? "Uploading..."
+                                    : allDone 
+                                      ? "Done" 
+                                      : hasPaused
+                                        ? "Resume ${manager.uploadQueue.where((item) => item.status == 'paused').length} Paused"
+                                        : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet').length} Files",
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              ),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: allDone ? Colors.green : (hasInterrupted ? Colors.orange : AppColors.blue),
+                                backgroundColor: allDone ? Colors.green : (hasPaused ? Colors.orange : AppColors.blue),
                                 foregroundColor: Colors.white,
                                 elevation: 0,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                               ),
-                              child: manager.isUploading 
-                                  ? const Text("Uploading...", style: TextStyle(fontWeight: FontWeight.bold))
-                                  : Text(
-                                      allDone 
-                                        ? "Done" 
-                                        : hasInterrupted
-                                          ? "Resume ${manager.uploadQueue.where((item) => item.status == 'interrupted').length} Interrupted"
-                                          : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet').length} Files",
-                                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)
-                                    ),
                             ),
                           );
                         }()),
@@ -352,10 +356,15 @@ Future<void> pickFiles() async {
         statusIcon = Icons.block;
         statusText = "Cancelled";
         break;
+      case 'paused':
+        statusColor = Colors.orange;
+        statusIcon = Icons.pause_circle_filled;
+        statusText = "Paused";
+        break;
       case 'interrupted':
         statusColor = Colors.orange;
         statusIcon = Icons.pause_circle_filled;
-        statusText = "Interrupted";
+        statusText = "Paused";
         break;
     }
 
@@ -416,7 +425,11 @@ Future<void> pickFiles() async {
 
                     // Status text + %
                     Text(
-                      isUploading ? 'Uploading · $pct%' : statusText,
+                      isUploading 
+                          ? 'Uploading · $pct%' 
+                          : (item.status == 'paused' && pct > 0)
+                            ? 'Paused · $pct%'
+                            : statusText,
                       style: TextStyle(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600),
                     ),
 
@@ -434,8 +447,8 @@ Future<void> pickFiles() async {
                   ],
                 ),
 
-                // Progress bar (uploading only)
-                if (isUploading) ...[
+                // Progress bar (uploading or paused with partial progress)
+                if (isUploading || (item.status == 'paused' && item.progress > 0)) ...[
                   const SizedBox(height: 5),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
@@ -443,7 +456,7 @@ Future<void> pickFiles() async {
                       value: item.progress,
                       minHeight: 4,
                       backgroundColor: Colors.grey[200],
-                      color: AppColors.blue,
+                      color: item.status == 'paused' ? Colors.orange : AppColors.blue,
                     ),
                   ),
                 ],
@@ -460,7 +473,7 @@ Future<void> pickFiles() async {
               icon: const Icon(Icons.cancel, size: 22, color: Colors.redAccent),
               onPressed: () => manager.cancelUpload(item),
             )
-          else if ((item.status == 'waiting' || item.status == 'interrupted') && !manager.isUploading)
+          else if ((item.status == 'waiting' || item.status == 'paused' || item.status == 'interrupted') && !manager.isUploading)
             IconButton(
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
