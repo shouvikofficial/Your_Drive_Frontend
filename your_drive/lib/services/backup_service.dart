@@ -54,7 +54,7 @@ void callbackDispatcher() {
       );
 
       final service = BackupService();
-      await service.startAutoBackup();
+      await service._executeBackup();
     } catch (e) {
       debugPrint("WorkManager error: $e");
     }
@@ -64,23 +64,80 @@ void callbackDispatcher() {
 }
 
 // ════════════════════════════════════════════════════════════
-// FOREGROUND TASK HANDLER
+// FOREGROUND TASK HANDLER  (runs in its own isolate after
+// the app is closed — this is what keeps backup alive)
 // ════════════════════════════════════════════════════════════
 @pragma('vm:entry-point')
 class BackupTaskHandler extends TaskHandler {
+  bool _initialized = false;
+
+  /// Ensure all dependencies are ready (may be a fresh isolate)
+  Future<void> _ensureInitialized() async {
+    if (_initialized) return;
+    try {
+      WidgetsFlutterBinding.ensureInitialized();
+
+      final dir = await getApplicationDocumentsDirectory();
+      Hive.init(dir.path);
+      if (!Hive.isBoxOpen('uploads')) {
+        await Hive.openBox('uploads');
+      }
+
+      try {
+        await Supabase.initialize(
+          url: Env.supabaseUrl,
+          anonKey: Env.supabaseAnonKey,
+        );
+      } catch (_) {
+        // Already initialized (app still alive in same isolate)
+      }
+
+      _initialized = true;
+      debugPrint("[BackupTaskHandler] Initialized successfully");
+    } catch (e) {
+      debugPrint("[BackupTaskHandler] Init error: $e");
+    }
+  }
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    debugPrint("Foreground backup task started");
+    debugPrint("[BackupTaskHandler] onStart (starter=$starter)");
+    await _ensureInitialized();
+
+    // Run backup immediately when the foreground service starts
+    final service = BackupService();
+    await service._executeBackup();
   }
 
   @override
   void onRepeatEvent(DateTime timestamp) {
-    // Managed by BackupService directly — no repeat needed
+    debugPrint("[BackupTaskHandler] onRepeatEvent fired");
+    _periodicBackup();
+  }
+
+  /// Periodic check: re-run backup if enabled and not already running
+  Future<void> _periodicBackup() async {
+    await _ensureInitialized();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+
+    final enabled = prefs.getBool('backup_enabled') ?? false;
+    if (!enabled) {
+      debugPrint("[BackupTaskHandler] Backup disabled — stopping service");
+      await FlutterForegroundTask.stopService();
+      return;
+    }
+
+    final service = BackupService();
+    if (!service._isBackingUp) {
+      await service._executeBackup();
+    }
   }
 
   @override
   Future<void> onDestroy(DateTime timestamp) async {
-    debugPrint("Foreground backup task destroyed");
+    debugPrint("[BackupTaskHandler] onDestroy");
   }
 }
 
@@ -185,7 +242,9 @@ class BackupService {
         autoRunOnMyPackageReplaced: true,
         allowWakeLock: true,
         allowWifiLock: true,
-        eventAction: ForegroundTaskEventAction.nothing(),
+        eventAction: ForegroundTaskEventAction.repeat(
+          5 * 60 * 1000, // 5 minutes in milliseconds
+        ),
       ),
     );
   }
@@ -340,7 +399,7 @@ class BackupService {
     phaseNotifier.value = BackupPhase.idle;
   }
 
-  /// Public entry — starts the scheduler + foreground service
+  /// Public entry — starts persistent foreground service + scheduler
   Future<void> startAutoBackup() async {
     debugPrint("[Backup] startAutoBackup called, _isBackingUp=$_isBackingUp");
     if (_isBackingUp) return;
@@ -353,6 +412,13 @@ class BackupService {
       return;
     }
 
+    // Start persistent foreground service (survives app close)
+    await _startForegroundService();
+
+    // Register WorkManager as a safety-net (restarts if OS kills service)
+    await scheduleBackgroundBackup();
+
+    // In-app scheduler for faster responsiveness while app is open
     startScheduler();
   }
 
@@ -411,9 +477,6 @@ class BackupService {
         return false;
       }
 
-      // Start foreground service for OS protection
-      await _startForegroundService();
-
       // Sync server hashes (once per session)
       await _syncServerState(user.id);
 
@@ -431,7 +494,6 @@ class BackupService {
 
       if (albums.isEmpty) {
         _finish("No media found");
-        await _stopForegroundService();
         return false;
       }
 
@@ -475,7 +537,6 @@ class BackupService {
       } catch (e) {
         debugPrint("[Backup] Vault locked: $e");
         _finish("Vault locked");
-        await _stopForegroundService();
         return false;
       }
 
@@ -496,7 +557,6 @@ class BackupService {
             if (!await _checkConstraints(prefs)) {
               debugPrint("[Backup] Constraints no longer met at file $scannedCount — pausing");
               _isBackingUp = false;
-              await _stopForegroundService();
               return uploadedCount > 0;
             }
           }
@@ -615,7 +675,6 @@ class BackupService {
       phaseNotifier.value = BackupPhase.error;
     } finally {
       _isBackingUp = false;
-      await _stopForegroundService();
     }
 
     return uploadedCount > 0;
