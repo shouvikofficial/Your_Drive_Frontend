@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; 
 import 'package:pin_code_fields/pin_code_fields.dart';
 import '../services/vault_service.dart';
+import '../services/backup_service.dart';
 import '../theme/app_colors.dart';
 import '../ui/dashboard_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -314,6 +315,9 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
 }
 
   void _goToDashboard() {
+    // Auto-resume backup if it was enabled (vault is now unlocked)
+    BackupService().startAutoBackup();
+
     Navigator.pushReplacement(
         context, MaterialPageRoute(builder: (_) => const DashboardPage()));
   }

@@ -259,13 +259,19 @@ class BackupService {
 
   /// Evaluate constraints and trigger backup if conditions allow
   Future<void> _evaluateAndTrigger() async {
+    debugPrint("[Backup] _evaluateAndTrigger called, _isBackingUp=$_isBackingUp");
     if (_isBackingUp) return; // already running
 
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool('backup_enabled') ?? false;
-    if (!enabled) return;
+    if (!enabled) {
+      debugPrint("[Backup] Skipped: backup not enabled");
+      return;
+    }
 
-    if (!await _checkConstraints(prefs)) return;
+    final constraintsPassed = await _checkConstraints(prefs);
+    debugPrint("[Backup] Constraints passed: $constraintsPassed");
+    if (!constraintsPassed) return;
 
     // Conditions met — trigger
     _runBackupCycle();
@@ -336,10 +342,12 @@ class BackupService {
 
   /// Public entry — starts the scheduler + foreground service
   Future<void> startAutoBackup() async {
+    debugPrint("[Backup] startAutoBackup called, _isBackingUp=$_isBackingUp");
     if (_isBackingUp) return;
 
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool('backup_enabled') ?? false;
+    debugPrint("[Backup] backup_enabled=$enabled");
     if (!enabled) {
       statusNotifier.value = "Backup Disabled";
       return;
@@ -362,13 +370,28 @@ class BackupService {
     int uploadedCount = 0;
 
     final prefs = await SharedPreferences.getInstance();
+
+    // ── ONE-TIME MIGRATION: Clear stale data from old backup code ──
+    final migrated = prefs.getBool('backup_v2_migrated') ?? false;
+    if (!migrated) {
+      debugPrint("[Backup] First run of v2 — clearing stale backup cache");
+      await prefs.remove('uploaded_assets');
+      await prefs.remove('last_backup_timestamp');
+      await prefs.setBool('backup_v2_migrated', true);
+      _serverHashes.clear();
+      _hasSyncedWithServer = false;
+    }
+
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
 
     if (user == null) {
+      debugPrint("[Backup] No user logged in");
       _finish("User not logged in");
       return false;
     }
+
+    debugPrint("[Backup] _executeBackup running for user ${user.id}");
 
     try {
       if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -377,11 +400,13 @@ class BackupService {
       }
 
       if (!await requestUniversalPermissions()) {
+        debugPrint("[Backup] Permission denied");
         _finish("Permission denied");
         return false;
       }
 
       if (!await _checkConstraints(prefs)) {
+        debugPrint("[Backup] Constraints failed in _executeBackup");
         _isBackingUp = false;
         return false;
       }
@@ -418,15 +443,27 @@ class BackupService {
       final lastBackupDate =
           DateTime.fromMillisecondsSinceEpoch(lastBackupTimestamp);
 
+      debugPrint("[Backup] totalAssets=$totalAssets, lastBackupTimestamp=$lastBackupTimestamp");
+      debugPrint("[Backup] lastBackupDate=$lastBackupDate");
+
       // Pagination
       int currentPage = 0;
       const pageSize = 80;
       int scannedCount = 0;
       bool reachedOldFiles = false;
 
+      // Skip counters (for diagnostics)
+      int skipCached = 0;
+      int skipDelta = 0;
+      int skipDedup = 0;
+      int skipNullFile = 0;
+      int skipUploadFail = 0;
+
       // Load local skip-list
       Set<String> uploadedIds =
           (prefs.getStringList('uploaded_assets') ?? []).toSet();
+      debugPrint("[Backup] uploadedIds cached: ${uploadedIds.length}");
+      debugPrint("[Backup] serverHashes: ${_serverHashes.length}");
 
       // Encryption key
       SecretKey? key;
@@ -434,7 +471,9 @@ class BackupService {
       try {
         key = await VaultService().getSecretKey();
         keyBytes = await key.extractBytes();
-      } catch (_) {
+        debugPrint("[Backup] Vault unlocked, key ready");
+      } catch (e) {
+        debugPrint("[Backup] Vault locked: $e");
         _finish("Vault locked");
         await _stopForegroundService();
         return false;
@@ -452,49 +491,68 @@ class BackupService {
         for (final asset in batch) {
           if (!_isBackingUp) break;
 
-          // Constraint live-check
-          if (!await _checkConstraints(prefs)) {
-            debugPrint("Constraints no longer met — pausing");
-            _isBackingUp = false;
-            await _stopForegroundService();
-            return uploadedCount > 0;
+          // Constraint live-check (every 10 files, not every file — too slow)
+          if (scannedCount % 10 == 0) {
+            if (!await _checkConstraints(prefs)) {
+              debugPrint("[Backup] Constraints no longer met at file $scannedCount — pausing");
+              _isBackingUp = false;
+              await _stopForegroundService();
+              return uploadedCount > 0;
+            }
           }
 
           scannedCount++;
-          statusNotifier.value = "Syncing $scannedCount / $totalAssets";
           progressNotifier.value = scannedCount / totalAssets;
 
-          // FAST SKIP: already uploaded
-          if (uploadedIds.contains(asset.id)) continue;
+          // FAST SKIP: already in local cache
+          if (uploadedIds.contains(asset.id)) {
+            skipCached++;
+            continue;
+          }
 
-          // DELTA SKIP: older than last successful run
+          // DELTA SKIP: older than last SUCCESSFUL backup run
           if (lastBackupTimestamp > 0 &&
               asset.createDateTime.isBefore(lastBackupDate)) {
+            skipDelta++;
             reachedOldFiles = true;
+            debugPrint("[Backup] Delta skip: asset ${asset.id} created ${asset.createDateTime} < $lastBackupDate");
             break;
           }
 
+          statusNotifier.value = "Syncing $scannedCount / $totalAssets";
+
           final file = await asset.file;
-          if (file == null) continue;
+          if (file == null) {
+            skipNullFile++;
+            debugPrint("[Backup] Null file: asset ${asset.id}");
+            continue;
+          }
+
+          debugPrint("[Backup] Processing: ${file.path} (${asset.createDateTime})");
 
           // ── HASH (Isolate) ──
           final fileHash = await compute(hashFileInIsolate, file.path);
 
           if (_serverHashes.contains(fileHash)) {
-            // Dedup — mark as done
+            // Dedup — file already on server (e.g. from manual upload)
+            skipDedup++;
+            debugPrint("[Backup] Dedup skip: $fileHash already on server");
             uploadedIds.add(asset.id);
             await prefs.setStringList(
                 'uploaded_assets', uploadedIds.toList());
             continue;
           }
 
-          // ── UPLOAD (same engine as UploadManager) ──
+          // ── UPLOAD ──
+          debugPrint("[Backup] Uploading: ${file.path} hash=$fileHash");
+
           final success = await _uploadFileChunked(
             file: file,
             fileHash: fileHash,
             key: key,
-            keyBytes: keyBytes,
+            keyBytes: keyBytes!,
           );
+          debugPrint("[Backup] Upload result: $success");
 
           if (success) {
             uploadedCount++;
@@ -503,33 +561,57 @@ class BackupService {
             await prefs.setStringList(
                 'uploaded_assets', uploadedIds.toList());
 
-            // Update foreground notification
             _updateForegroundNotification(
                 "Backed up $uploadedCount files...");
+          } else {
+            skipUploadFail++;
+            debugPrint("[Backup] Upload FAILED for: ${file.path}");
           }
         }
 
         currentPage++;
       }
 
-      // Record timestamp for delta sync
-      if (uploadedCount > 0 || !reachedOldFiles) {
+      // DIAGNOSTICS SUMMARY
+      debugPrint("[Backup] ══════════════════════════════════");
+      debugPrint("[Backup] Scan complete.");
+      debugPrint("[Backup]   Scanned:      $scannedCount");
+      debugPrint("[Backup]   Uploaded:      $uploadedCount");
+      debugPrint("[Backup]   Skip (cached): $skipCached");
+      debugPrint("[Backup]   Skip (delta):  $skipDelta");
+      debugPrint("[Backup]   Skip (dedup):  $skipDedup");
+      debugPrint("[Backup]   Skip (null):   $skipNullFile");
+      debugPrint("[Backup]   Skip (fail):   $skipUploadFail");
+      debugPrint("[Backup] ══════════════════════════════════");
+
+      // Record timestamp for delta sync — ONLY when files were actually uploaded
+      if (uploadedCount > 0) {
         await prefs.setInt(
           'last_backup_timestamp',
           DateTime.now().millisecondsSinceEpoch,
         );
+        debugPrint("[Backup] Saved delta timestamp");
       }
 
       if (_isBackingUp) {
-        statusNotifier.value = uploadedCount > 0
-            ? "Backed up $uploadedCount files"
-            : "Everything up to date";
+        if (uploadedCount > 0) {
+          statusNotifier.value = "Backed up $uploadedCount files";
+        } else if (skipCached > 0 || skipDedup > 0) {
+          statusNotifier.value = "Everything up to date";
+        } else if (skipNullFile == scannedCount) {
+          statusNotifier.value = "No accessible media files";
+        } else if (skipUploadFail > 0) {
+          statusNotifier.value = "Upload failed for $skipUploadFail files";
+        } else {
+          statusNotifier.value = "Everything up to date";
+        }
         progressNotifier.value = 1.0;
         phaseNotifier.value = BackupPhase.complete;
       }
-    } catch (e) {
-      debugPrint("Backup Error: $e");
-      statusNotifier.value = "Error occurred";
+    } catch (e, stack) {
+      debugPrint("[Backup] Error: $e");
+      debugPrint("[Backup] Stack: $stack");
+      statusNotifier.value = "Error: $e";
       phaseNotifier.value = BackupPhase.error;
     } finally {
       _isBackingUp = false;
@@ -552,7 +634,12 @@ class BackupService {
     try {
       final fileName = file.path.split(Platform.pathSeparator).last;
       final fileSize = await file.length();
-      if (fileSize == 0) return false;
+      if (fileSize == 0) {
+        debugPrint("[Backup-Upload] File is empty: $fileName");
+        return false;
+      }
+
+      debugPrint("[Backup-Upload] Starting: $fileName (${(fileSize / 1024 / 1024).toStringAsFixed(1)} MB)");
 
       // Start thumbnail in parallel
       Future<Uint8List?>? thumbnailFuture;
@@ -582,6 +669,9 @@ class BackupService {
       final chunkSize = strategy.chunkSize;
       final maxParallel = strategy.parallelChunks;
       final totalChunks = (fileSize / chunkSize).ceil();
+
+      debugPrint("[Backup-Upload] Strategy: chunk=${chunkSize ~/ 1024}KB, parallel=$maxParallel, totalChunks=$totalChunks");
+      debugPrint("[Backup-Upload] uploadId=$uploadId, resumeFrom=$uploadedChunks");
 
       final raf = await file.open();
       String? realMessageIdGlobal;
@@ -712,9 +802,11 @@ class BackupService {
       }
 
       await ResumeStore.clear(uploadId);
+      debugPrint("[Backup-Upload] SUCCESS: $fileName");
       return true;
-    } catch (e) {
-      debugPrint("Backup upload error: $e");
+    } catch (e, stack) {
+      debugPrint("[Backup-Upload] FAILED: $e");
+      debugPrint("[Backup-Upload] Stack: $stack");
       return false;
     }
   }
@@ -872,6 +964,8 @@ class BackupService {
   Future<void> _syncServerState(String userId) async {
     if (_hasSyncedWithServer) return;
 
+    debugPrint("[Backup] Syncing server state for user: $userId");
+
     final res = await Supabase.instance.client
         .from('files')
         .select('hash')
@@ -879,6 +973,8 @@ class BackupService {
 
     _serverHashes = (res as List).map((e) => e['hash'] as String).toSet();
     _hasSyncedWithServer = true;
+
+    debugPrint("[Backup] Server hashes loaded: ${_serverHashes.length} files already on server");
   }
 
   /// Deterministic per-chunk nonce derivation
