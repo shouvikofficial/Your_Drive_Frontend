@@ -3,7 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_colors.dart';
 import '../services/biometric_service.dart'; 
 import '../services/backup_service.dart';
-import 'devices_sessions_page.dart'; // ✅ Import Backup Service
+import 'devices_sessions_page.dart';
 
 /// ------------------------------------------------------
 /// ☁️ BACKUP & SYNC PAGE (With Instant Triggers)
@@ -139,15 +139,57 @@ class _BackupSettingsPageState extends State<BackupSettingsPage> {
             ),
           ),
 
-          // 📊 LIVE STATUS INDICATOR
+          // 📊 LIVE STATUS INDICATOR (Phase + Text)
           const SizedBox(height: 24),
-          ValueListenableBuilder<String>(
-            valueListenable: _backupService.statusNotifier,
-            builder: (context, status, _) {
-              return Center(
-                child: Text(
-                  "Status: $status",
-                  style: TextStyle(color: Colors.grey[600], fontSize: 13, fontStyle: FontStyle.italic),
+          ValueListenableBuilder<BackupPhase>(
+            valueListenable: _backupService.phaseNotifier,
+            builder: (context, phase, _) {
+              return ValueListenableBuilder<String>(
+                valueListenable: _backupService.statusNotifier,
+                builder: (context, status, _) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _phaseColor(phase).withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        _phaseIcon(phase),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            status,
+                            style: TextStyle(
+                              color: _phaseColor(phase),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+
+          // Progress bar
+          ValueListenableBuilder<double>(
+            valueListenable: _backupService.progressNotifier,
+            builder: (context, progress, _) {
+              if (progress <= 0 || progress >= 1) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 6,
+                    backgroundColor: Colors.grey[200],
+                    color: AppColors.blue,
+                  ),
                 ),
               );
             },
@@ -155,6 +197,45 @@ class _BackupSettingsPageState extends State<BackupSettingsPage> {
         ],
       ),
     );
+  }
+
+  Color _phaseColor(BackupPhase phase) {
+    switch (phase) {
+      case BackupPhase.uploading:
+      case BackupPhase.scanning:
+        return AppColors.blue;
+      case BackupPhase.complete:
+        return Colors.green;
+      case BackupPhase.error:
+        return Colors.red;
+      case BackupPhase.waitingWifi:
+      case BackupPhase.waitingCharger:
+        return Colors.orange;
+      case BackupPhase.idle:
+        return Colors.grey;
+    }
+  }
+
+  Widget _phaseIcon(BackupPhase phase) {
+    switch (phase) {
+      case BackupPhase.uploading:
+        return const SizedBox(
+          width: 18, height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.blue),
+        );
+      case BackupPhase.scanning:
+        return const Icon(Icons.search, size: 18, color: Colors.blue);
+      case BackupPhase.complete:
+        return const Icon(Icons.check_circle, size: 18, color: Colors.green);
+      case BackupPhase.error:
+        return const Icon(Icons.error, size: 18, color: Colors.red);
+      case BackupPhase.waitingWifi:
+        return const Icon(Icons.wifi_off, size: 18, color: Colors.orange);
+      case BackupPhase.waitingCharger:
+        return const Icon(Icons.battery_alert, size: 18, color: Colors.orange);
+      case BackupPhase.idle:
+        return const Icon(Icons.cloud_done, size: 18, color: Colors.grey);
+    }
   }
 }
 

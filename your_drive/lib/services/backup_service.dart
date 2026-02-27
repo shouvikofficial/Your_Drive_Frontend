@@ -2,8 +2,10 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:math';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart' as dio;
@@ -16,60 +18,189 @@ import 'package:battery_plus/battery_plus.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:hive/hive.dart';
 
 import '../config/env.dart';
 import '../services/vault_service.dart';
+import '../services/network_speed.dart';
+import '../services/upload_strategy.dart';
+import '../services/retry_helper.dart';
+import '../services/resume_store.dart';
+import '../workers/encryption_worker.dart';
+import '../workers/hash_worker.dart';
+import '../workers/media_thumbnail_worker.dart';
 
-// 🛑 TOP-LEVEL FUNCTION
+// ════════════════════════════════════════════════════════════
+// TOP-LEVEL WORKMANAGER CALLBACK
+// ════════════════════════════════════════════════════════════
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
-    print("🌙 Background Backup Started");
+    debugPrint("WorkManager backup trigger fired");
 
-    await Supabase.initialize(
-      url: Env.supabaseUrl,
-      anonKey: Env.supabaseAnonKey,
-    );
+    try {
+      WidgetsFlutterBinding.ensureInitialized();
 
-    final service = BackupService();
-    await service.startAutoBackup();
+      final dir = await getApplicationDocumentsDirectory();
+      Hive.init(dir.path);
+      if (!Hive.isBoxOpen('uploads')) {
+        await Hive.openBox('uploads');
+      }
 
-    return Future.value(true);
+      await Supabase.initialize(
+        url: Env.supabaseUrl,
+        anonKey: Env.supabaseAnonKey,
+      );
+
+      final service = BackupService();
+      await service.startAutoBackup();
+    } catch (e) {
+      debugPrint("WorkManager error: $e");
+    }
+
+    return true;
   });
 }
 
+// ════════════════════════════════════════════════════════════
+// FOREGROUND TASK HANDLER
+// ════════════════════════════════════════════════════════════
+@pragma('vm:entry-point')
+class BackupTaskHandler extends TaskHandler {
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    debugPrint("Foreground backup task started");
+  }
+
+  @override
+  void onRepeatEvent(DateTime timestamp) {
+    // Managed by BackupService directly — no repeat needed
+  }
+
+  @override
+  Future<void> onDestroy(DateTime timestamp) async {
+    debugPrint("Foreground backup task destroyed");
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// BACKUP PHASE ENUM (for UI binding)
+// ════════════════════════════════════════════════════════════
+enum BackupPhase {
+  idle,
+  scanning,
+  uploading,
+  complete,
+  error,
+  waitingWifi,
+  waitingCharger,
+}
+
+// ════════════════════════════════════════════════════════════
+// FOREGROUND TASK ENTRY POINT
+// ════════════════════════════════════════════════════════════
+@pragma('vm:entry-point')
+void _foregroundTaskStart() {
+  FlutterForegroundTask.setTaskHandler(BackupTaskHandler());
+}
+
+// ════════════════════════════════════════════════════════════
+//  BACKUP SERVICE  (Production-Grade)
+//
+//  Upload Engine (same as UploadManager):
+//   - Per-chunk AES-256-GCM encryption in isolate
+//   - Adaptive chunk sizes (UploadStrategy)
+//   - Resume support (ResumeStore / Hive)
+//   - Retry with exponential backoff
+//   - Thumbnail generation + encrypted upload
+//   - Hash deduplication
+//
+//  Smart Scheduling (Google Drive / Proton Drive style):
+//   - Delta sync — only scans photos newer than last backup
+//   - Exponential backoff when nothing to upload
+//   - Foreground service while backup is active
+//   - Auto-resume on connectivity / charger change
+//   - Periodic WorkManager fallback (Android 15-min min)
+// ════════════════════════════════════════════════════════════
 class BackupService {
   static final BackupService _instance = BackupService._internal();
   factory BackupService() => _instance;
   BackupService._internal();
 
+  // ───── UI Observables ─────
   final ValueNotifier<double> progressNotifier = ValueNotifier(0.0);
   final ValueNotifier<String> statusNotifier = ValueNotifier("Idle");
-  bool _isBackingUp = false;
+  final ValueNotifier<BackupPhase> phaseNotifier =
+      ValueNotifier(BackupPhase.idle);
 
-  // 🧠 Memory Cache
+  // ───── Internal State ─────
+  bool _isBackingUp = false;
+  bool get isBackingUp => _isBackingUp;
+
   Set<String> _serverHashes = {};
   bool _hasSyncedWithServer = false;
-  String? _lastIV;
 
-  // ---------------------------------------------------------
-  // ✅ 1. BACKGROUND SERVICE SETUP
-  // ---------------------------------------------------------
+  // ───── Smart Scheduler State ─────
+  StreamSubscription? _connectivitySub;
+  StreamSubscription? _batterySub;
+  Timer? _schedulerTimer;
+  int _consecutiveIdleRuns = 0;
+  static const int _maxBackoffMinutes = 60; // cap backoff at 1 hour
+  static const int _baseIntervalSeconds = 30; // initial poll after first run
+
+  // ───── Upload Engine Constants ─────
+  static const int _maxActiveChunks = 6;
+  int _activeChunks = 0;
+  DateTime _lastUiUpdate = DateTime.now();
+
+  final String _chunkUploadUrl = "${Env.backendBaseUrl}/api/upload-chunk";
+
+  // ═══════════════════════════════════════════════════
+  //  1.  INIT & SCHEDULING
+  // ═══════════════════════════════════════════════════
+
+  /// Call once at app startup (main.dart)
   Future<void> initBackgroundService() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+
+    // WorkManager init
     await Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
+
+    // Foreground task init
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'backup_channel',
+        channelName: 'Cloud Guard Backup',
+        channelDescription: 'Backing up your photos & videos',
+        channelImportance: NotificationChannelImportance.LOW,
+        priority: NotificationPriority.LOW,
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(
+        showNotification: false,
+        playSound: false,
+      ),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        autoRunOnBoot: true,
+        autoRunOnMyPackageReplaced: true,
+        allowWakeLock: true,
+        allowWifiLock: true,
+        eventAction: ForegroundTaskEventAction.nothing(),
+      ),
+    );
   }
 
+  /// Register the 15-min WorkManager periodic task (Android minimum)
   Future<void> scheduleBackgroundBackup() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
-    
-    // Read prefs to apply correct constraints to the system job
+
     final prefs = await SharedPreferences.getInstance();
     final wifiOnly = prefs.getBool('wifi_only') ?? true;
     final chargingOnly = prefs.getBool('charging_only') ?? false;
 
     Workmanager().registerPeriodicTask(
-      "1", "autoBackupTask",
+      "backup_periodic",
+      "autoBackupTask",
       frequency: const Duration(minutes: 15),
       constraints: Constraints(
         networkType: wifiOnly ? NetworkType.unmetered : NetworkType.connected,
@@ -83,323 +214,661 @@ class BackupService {
   void cancelBackgroundBackup() {
     if (!Platform.isAndroid && !Platform.isIOS) return;
     Workmanager().cancelAll();
+    _stopScheduler();
   }
 
-  // ---------------------------------------------------------
-  // ✅ 2. PERMISSIONS
-  // ---------------------------------------------------------
+  // ─────────────────────────────────────────────────
+  //  SMART SCHEDULER  (Google/Proton Drive style)
+  //
+  //  - Monitors connectivity + battery in real-time
+  //  - Re-triggers backup whenever conditions are met
+  //  - Exponential backoff when nothing new to upload
+  //  - Immediate re-trigger on Wi-Fi connect / charger plug
+  // ─────────────────────────────────────────────────
+
+  /// Start the smart scheduler — call when user enables backup
+  void startScheduler() {
+    _stopScheduler(); // clean up any existing listeners
+
+    // Auto-resume on connectivity change
+    _connectivitySub = Connectivity()
+        .onConnectivityChanged
+        .listen((List<ConnectivityResult> results) {
+      debugPrint("Connectivity changed: $results");
+      _evaluateAndTrigger();
+    });
+
+    // Auto-resume on charger plug-in
+    _batterySub = Battery().onBatteryStateChanged.listen((state) {
+      debugPrint("Battery state: $state");
+      _evaluateAndTrigger();
+    });
+
+    // Kick off first evaluation
+    _evaluateAndTrigger();
+  }
+
+  void _stopScheduler() {
+    _connectivitySub?.cancel();
+    _connectivitySub = null;
+    _batterySub?.cancel();
+    _batterySub = null;
+    _schedulerTimer?.cancel();
+    _schedulerTimer = null;
+  }
+
+  /// Evaluate constraints and trigger backup if conditions allow
+  Future<void> _evaluateAndTrigger() async {
+    if (_isBackingUp) return; // already running
+
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('backup_enabled') ?? false;
+    if (!enabled) return;
+
+    if (!await _checkConstraints(prefs)) return;
+
+    // Conditions met — trigger
+    _runBackupCycle();
+  }
+
+  /// Run a single backup cycle, then schedule next evaluation
+  Future<void> _runBackupCycle() async {
+    if (_isBackingUp) return;
+
+    final uploadedAny = await _executeBackup();
+
+    if (uploadedAny) {
+      _consecutiveIdleRuns = 0;
+      // Something was uploaded — re-run soon to check for more
+      _scheduleNextEvaluation(const Duration(seconds: 10));
+    } else {
+      _consecutiveIdleRuns++;
+      // Nothing to upload — exponential backoff
+      final backoffSeconds = min(
+        _baseIntervalSeconds * pow(2, _consecutiveIdleRuns).toInt(),
+        _maxBackoffMinutes * 60,
+      );
+      debugPrint("Backup idle, next check in ${backoffSeconds}s");
+      _scheduleNextEvaluation(Duration(seconds: backoffSeconds));
+    }
+  }
+
+  void _scheduleNextEvaluation(Duration delay) {
+    _schedulerTimer?.cancel();
+    _schedulerTimer = Timer(delay, () => _evaluateAndTrigger());
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  2.  PERMISSIONS
+  // ═══════════════════════════════════════════════════
+
   Future<bool> requestUniversalPermissions() async {
     if (Platform.isAndroid) {
       final androidInfo = await DeviceInfoPlugin().androidInfo;
       if (androidInfo.version.sdkInt >= 33) {
         final photos = await Permission.photos.request();
         final videos = await Permission.videos.request();
-        final notification = await Permission.notification.request();
-        return (photos.isGranted || photos.isLimited) && (videos.isGranted || videos.isLimited);
+        await Permission.notification.request();
+        return (photos.isGranted || photos.isLimited) &&
+            (videos.isGranted || videos.isLimited);
       } else {
         final status = await Permission.storage.request();
         if (androidInfo.version.sdkInt >= 30 && status.isDenied) {
-           return await Permission.manageExternalStorage.request().isGranted;
+          return await Permission.manageExternalStorage.request().isGranted;
         }
         return status.isGranted;
       }
-    } 
-    return true; 
+    }
+    return true;
   }
 
-  // ---------------------------------------------------------
-  // 🚀 3. OPTIMIZED BACKUP LOGIC
-  // ---------------------------------------------------------
+  // ═══════════════════════════════════════════════════
+  //  3.  MAIN BACKUP ENTRY (public)
+  // ═══════════════════════════════════════════════════
+
   void stopBackup() {
     _isBackingUp = false;
+    _stopScheduler();
+    _stopForegroundService();
     statusNotifier.value = "Backup stopped";
+    phaseNotifier.value = BackupPhase.idle;
   }
 
+  /// Public entry — starts the scheduler + foreground service
   Future<void> startAutoBackup() async {
     if (_isBackingUp) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('backup_enabled') ?? false;
+    if (!enabled) {
+      statusNotifier.value = "Backup Disabled";
+      return;
+    }
+
+    startScheduler();
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  4.  CORE BACKUP ENGINE  (same as UploadManager)
+  // ═══════════════════════════════════════════════════
+
+  /// Returns `true` if at least one file was uploaded
+  Future<bool> _executeBackup() async {
+    if (_isBackingUp) return false;
     _isBackingUp = true;
+
     statusNotifier.value = "Preparing...";
+    phaseNotifier.value = BackupPhase.scanning;
+    int uploadedCount = 0;
 
     final prefs = await SharedPreferences.getInstance();
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
 
     if (user == null) {
-      _stop("User not logged in");
-      return;
+      _finish("User not logged in");
+      return false;
     }
 
     try {
       if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        _stop("Mobile Only");
-        return;
+        _finish("Mobile Only");
+        return false;
       }
 
-      // 🛑 Pre-flight Permission Check
       if (!await requestUniversalPermissions()) {
-        _stop("Permission denied");
-        return;
+        _finish("Permission denied");
+        return false;
       }
-      
-      // 🔥 Initial Constraint Check (Instant Pause)
+
       if (!await _checkConstraints(prefs)) {
         _isBackingUp = false;
-        return; 
+        return false;
       }
 
-      // 🔄 Sync Server State
+      // Start foreground service for OS protection
+      await _startForegroundService();
+
+      // Sync server hashes (once per session)
       await _syncServerState(user.id);
 
       statusNotifier.value = "Scanning gallery...";
-      
-      final List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
+      phaseNotifier.value = BackupPhase.scanning;
+
+      final albums = await PhotoManager.getAssetPathList(
         type: RequestType.common,
-        filterOption: FilterOptionGroup(orders: [const OrderOption(type: OrderOptionType.createDate, asc: false)]),
+        filterOption: FilterOptionGroup(
+          orders: [
+            const OrderOption(type: OrderOptionType.createDate, asc: false),
+          ],
+        ),
       );
 
       if (albums.isEmpty) {
-        _stop("No media found");
-        return;
+        _finish("No media found");
+        await _stopForegroundService();
+        return false;
       }
 
-      final AssetPathEntity recentAlbum = albums[0];
-      final int totalAssets = await recentAlbum.assetCountAsync;
-      
-      // ⚡ PAGINATION SETUP (Infinite Scan)
+      final recentAlbum = albums[0];
+      final totalAssets = await recentAlbum.assetCountAsync;
+
+      // ── DELTA SYNC: Skip already-processed assets ──
+      final lastBackupTimestamp = prefs.getInt('last_backup_timestamp') ?? 0;
+      final lastBackupDate =
+          DateTime.fromMillisecondsSinceEpoch(lastBackupTimestamp);
+
+      // Pagination
       int currentPage = 0;
-      const int pageSize = 100; // Fetch 100 at a time
-      int processedCount = 0;
+      const pageSize = 80;
+      int scannedCount = 0;
+      bool reachedOldFiles = false;
 
-      // 🔄 THE INFINITE LOOP
-      while (_isBackingUp) {
-        // Fetch next page of photos
-        final List<AssetEntity> batch = await recentAlbum.getAssetListPaged(page: currentPage, size: pageSize);
-        
-        if (batch.isEmpty) break; // Stop if no more photos
+      // Load local skip-list
+      Set<String> uploadedIds =
+          (prefs.getStringList('uploaded_assets') ?? []).toSet();
 
-        // Load local cache
-        List<String> uploadedList = prefs.getStringList('uploaded_assets') ?? [];
-        Set<String> uploadedIds = uploadedList.toSet();
+      // Encryption key
+      SecretKey? key;
+      List<int>? keyBytes;
+      try {
+        key = await VaultService().getSecretKey();
+        keyBytes = await key.extractBytes();
+      } catch (_) {
+        _finish("Vault locked");
+        await _stopForegroundService();
+        return false;
+      }
 
-        for (var asset in batch) {
-          // 🔥 LIVE PAUSE CHECK (Reacts Instantly)
+      phaseNotifier.value = BackupPhase.uploading;
+
+      while (_isBackingUp && !reachedOldFiles) {
+        final batch = await recentAlbum.getAssetListPaged(
+          page: currentPage,
+          size: pageSize,
+        );
+        if (batch.isEmpty) break;
+
+        for (final asset in batch) {
+          if (!_isBackingUp) break;
+
+          // Constraint live-check
           if (!await _checkConstraints(prefs)) {
-             print("⚠️ Backup paused: Constraints not met.");
-             _isBackingUp = false;
-             return; 
+            debugPrint("Constraints no longer met — pausing");
+            _isBackingUp = false;
+            await _stopForegroundService();
+            return uploadedCount > 0;
           }
 
-          // ✅ CLEAN UI UPDATE
-          statusNotifier.value = "Syncing ${processedCount + 1} / $totalAssets";
-          progressNotifier.value = processedCount / totalAssets;
-          processedCount++;
+          scannedCount++;
+          statusNotifier.value = "Syncing $scannedCount / $totalAssets";
+          progressNotifier.value = scannedCount / totalAssets;
 
-          // ⚡ FAST SKIP: Check ID first!
-          if (uploadedIds.contains(asset.id)) {
-             continue; // Skip without heavy work
+          // FAST SKIP: already uploaded
+          if (uploadedIds.contains(asset.id)) continue;
+
+          // DELTA SKIP: older than last successful run
+          if (lastBackupTimestamp > 0 &&
+              asset.createDateTime.isBefore(lastBackupDate)) {
+            reachedOldFiles = true;
+            break;
           }
 
-          File? file = await asset.file;
-          if (file != null) {
-            // 🛑 HASH CHECK (Only for new files)
-            String fileHash = await _getFileHash(file);
+          final file = await asset.file;
+          if (file == null) continue;
 
-            if (_serverHashes.contains(fileHash)) {
-              // Deduplication Skip
-              uploadedIds.add(asset.id);
-              await prefs.setStringList('uploaded_assets', uploadedIds.toList());
-            } else {
-              // 🔐 ENCRYPT
-              final encrypted = await _createEncryptedTempFile(file);
-              if (encrypted == null) continue;
+          // ── HASH (Isolate) ──
+          final fileHash = await compute(hashFileInIsolate, file.path);
 
-              // 🚀 UPLOAD
-              bool success = await _uploadChunkedFile(encrypted, fileHash, file.path);
-              
-              // CLEANUP TEMP FILE
-              if (await encrypted.exists()) await encrypted.delete();
+          if (_serverHashes.contains(fileHash)) {
+            // Dedup — mark as done
+            uploadedIds.add(asset.id);
+            await prefs.setStringList(
+                'uploaded_assets', uploadedIds.toList());
+            continue;
+          }
 
-              if (success) {
-                uploadedIds.add(asset.id);
-                _serverHashes.add(fileHash); 
-                await prefs.setStringList('uploaded_assets', uploadedIds.toList());
-              }
-            }
+          // ── UPLOAD (same engine as UploadManager) ──
+          final success = await _uploadFileChunked(
+            file: file,
+            fileHash: fileHash,
+            key: key,
+            keyBytes: keyBytes,
+          );
+
+          if (success) {
+            uploadedCount++;
+            uploadedIds.add(asset.id);
+            _serverHashes.add(fileHash);
+            await prefs.setStringList(
+                'uploaded_assets', uploadedIds.toList());
+
+            // Update foreground notification
+            _updateForegroundNotification(
+                "Backed up $uploadedCount files...");
           }
         }
-        currentPage++; // Next page
+
+        currentPage++;
+      }
+
+      // Record timestamp for delta sync
+      if (uploadedCount > 0 || !reachedOldFiles) {
+        await prefs.setInt(
+          'last_backup_timestamp',
+          DateTime.now().millisecondsSinceEpoch,
+        );
       }
 
       if (_isBackingUp) {
-        statusNotifier.value = "Backup complete";
+        statusNotifier.value = uploadedCount > 0
+            ? "Backed up $uploadedCount files"
+            : "Everything up to date";
         progressNotifier.value = 1.0;
+        phaseNotifier.value = BackupPhase.complete;
       }
-
     } catch (e) {
-      print("Backup Error: $e");
+      debugPrint("Backup Error: $e");
       statusNotifier.value = "Error occurred";
+      phaseNotifier.value = BackupPhase.error;
     } finally {
       _isBackingUp = false;
+      await _stopForegroundService();
+    }
+
+    return uploadedCount > 0;
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  5.  CHUNKED UPLOAD ENGINE  (mirrors UploadManager)
+  // ═══════════════════════════════════════════════════
+
+  Future<bool> _uploadFileChunked({
+    required File file,
+    required String fileHash,
+    required SecretKey key,
+    required List<int> keyBytes,
+  }) async {
+    try {
+      final fileName = file.path.split(Platform.pathSeparator).last;
+      final fileSize = await file.length();
+      if (fileSize == 0) return false;
+
+      // Start thumbnail in parallel
+      Future<Uint8List?>? thumbnailFuture;
+      final fileType = _getFileType(fileName);
+      if (fileType == 'image') {
+        thumbnailFuture = generateImageThumbnail(file.path);
+      } else if (fileType == 'video') {
+        thumbnailFuture = generateVideoThumbnail(file.path);
+      }
+
+      // ── Strategy ──
+      final isWifi = await NetworkSpeed.isWifi();
+      final strategy = UploadStrategy.decide(
+        fileSize: fileSize,
+        isWifi: isWifi,
+      );
+
+      // ── Nonce ──
+      final baseNonce = VaultService().generateNonce();
+
+      // ── Resume ──
+      final uploadId =
+          "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}";
+      int uploadedChunks = ResumeStore.getProgress(uploadId);
+
+      // ── Chunk math ──
+      final chunkSize = strategy.chunkSize;
+      final maxParallel = strategy.parallelChunks;
+      final totalChunks = (fileSize / chunkSize).ceil();
+
+      final raf = await file.open();
+      String? realMessageIdGlobal;
+
+      Future<void> processChunk(int index) async {
+        if (!_isBackingUp) return;
+
+        // RAM gate
+        while (_activeChunks >= _maxActiveChunks) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+        _activeChunks++;
+
+        try {
+          final start = index * chunkSize;
+          final end = min(start + chunkSize, fileSize);
+          final length = end - start;
+
+          await raf.setPosition(start);
+          final plainBytes = await raf.read(length);
+
+          final nonce = _buildChunkNonce(baseNonce, index);
+
+          // Encrypt in isolate
+          final encryptedBytes = await compute(
+            encryptChunkInIsolate,
+            EncryptParams(
+              bytes: plainBytes,
+              keyBytes: keyBytes,
+              nonce: nonce,
+            ),
+          );
+
+          // Upload with retry
+          final response = await RetryHelper.retry(() => dio.Dio().post(
+                _chunkUploadUrl,
+                data: dio.FormData.fromMap({
+                  "file": dio.MultipartFile.fromBytes(
+                    encryptedBytes,
+                    filename: fileName,
+                  ),
+                  "chunk_index": index,
+                  "total_chunks": totalChunks,
+                  "file_name": fileName,
+                  "upload_id": uploadId,
+                }),
+              ));
+
+          if (response.statusCode == null || response.statusCode! >= 300) {
+            throw Exception("Chunk $index upload failed");
+          }
+
+          // Last chunk — save metadata
+          if (response.data["status"] == "done") {
+            final realMessageId = response.data["message_id"];
+            if (realMessageId == null) {
+              throw Exception("Backend returned no message_id");
+            }
+            realMessageIdGlobal = realMessageId.toString();
+
+            await _saveToSupabase(
+              data: {
+                "file_id": uploadId,
+                "message_id": realMessageId,
+              },
+              name: fileName,
+              size: fileSize,
+              hash: fileHash,
+              ivBase64: base64Encode(baseNonce),
+              chunkSize: chunkSize,
+              totalChunks: totalChunks,
+            );
+          }
+
+          uploadedChunks++;
+          await ResumeStore.saveProgress(uploadId, uploadedChunks);
+
+          // Throttle UI
+          final now = DateTime.now();
+          if (now.difference(_lastUiUpdate).inMilliseconds > 300 ||
+              uploadedChunks == totalChunks) {
+            _lastUiUpdate = now;
+          }
+        } finally {
+          _activeChunks--;
+        }
+      }
+
+      // ── Parallel chunk loop ──
+      List<Future> pool = [];
+      for (int i = uploadedChunks; i < totalChunks; i++) {
+        if (!_isBackingUp) break;
+
+        pool.add(processChunk(i));
+        if (pool.length == maxParallel) {
+          await Future.wait(pool);
+          pool.clear();
+        }
+      }
+      if (pool.isNotEmpty) await Future.wait(pool);
+
+      await raf.close();
+
+      // ── Thumbnail upload ──
+      if (thumbnailFuture != null) {
+        try {
+          final thumbBytes = await thumbnailFuture;
+          if (thumbBytes != null) {
+            final thumbNonce = VaultService().generateNonce();
+            final algo = AesGcm.with256bits();
+            final secretBox = await algo.encrypt(
+              thumbBytes,
+              secretKey: key,
+              nonce: thumbNonce,
+            );
+            final encryptedThumb =
+                secretBox.cipherText + secretBox.mac.bytes;
+
+            await _uploadEncryptedThumbnail(
+              realMessageIdGlobal ?? uploadId,
+              encryptedThumb,
+              thumbNonce,
+            );
+          }
+        } catch (e) {
+          debugPrint("Backup thumbnail error: $e");
+        }
+      }
+
+      await ResumeStore.clear(uploadId);
+      return true;
+    } catch (e) {
+      debugPrint("Backup upload error: $e");
+      return false;
     }
   }
 
-  // ---------------------------------------------------------
-  // 🔥 HELPER: INSTANT CONSTRAINT CHECKER (FIXED)
-  // ---------------------------------------------------------
+  // ═══════════════════════════════════════════════════
+  //  6.  SUPABASE METADATA
+  // ═══════════════════════════════════════════════════
+
+  Future<void> _saveToSupabase({
+    required Map data,
+    required String name,
+    required int size,
+    required String hash,
+    required String ivBase64,
+    required int chunkSize,
+    required int totalChunks,
+  }) async {
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    await supabase.from('files').insert({
+      'user_id': user.id,
+      'file_id': data['file_id'],
+      'message_id': data['message_id'],
+      'name': name,
+      'type': _getFileType(name),
+      'folder_id': null, // backup goes to root
+      'size': size,
+      'hash': hash,
+      'iv': ivBase64,
+      'chunk_size': chunkSize,
+      'total_chunks': totalChunks,
+    });
+  }
+
+  Future<void> _uploadEncryptedThumbnail(
+    String fileId,
+    List<int> encryptedBytes,
+    List<int> nonce,
+  ) async {
+    try {
+      final supabase = Supabase.instance.client;
+
+      final response = await dio.Dio().post(
+        "${Env.backendBaseUrl}/api/upload-thumbnail",
+        data: dio.FormData.fromMap({
+          "file": dio.MultipartFile.fromBytes(
+            encryptedBytes,
+            filename: "thumb_$fileId.enc",
+          ),
+          "upload_id": fileId,
+        }),
+      );
+
+      if (response.statusCode == null || response.statusCode! >= 300) return;
+
+      final tgThumbMessageId = response.data["message_id"];
+      if (tgThumbMessageId == null) return;
+
+      await supabase.from('files').update({
+        'thumbnail_id': tgThumbMessageId,
+        'thumbnail_iv': base64Encode(nonce),
+      }).eq('message_id', int.tryParse(fileId) ?? fileId);
+    } catch (e) {
+      debugPrint("Backup thumbnail upload error: $e");
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  7.  FOREGROUND SERVICE
+  // ═══════════════════════════════════════════════════
+
+  Future<void> _startForegroundService() async {
+    if (!Platform.isAndroid) return;
+
+    try {
+      if (await FlutterForegroundTask.isRunningService) return;
+
+      await FlutterForegroundTask.startService(
+        notificationTitle: "Cloud Guard Backup",
+        notificationText: "Backing up your photos & videos...",
+        callback: _foregroundTaskStart,
+      );
+    } catch (e) {
+      debugPrint("Foreground svc start error: $e");
+    }
+  }
+
+  void _updateForegroundNotification(String text) {
+    if (!Platform.isAndroid) return;
+    try {
+      FlutterForegroundTask.updateService(
+        notificationTitle: "Cloud Guard Backup",
+        notificationText: text,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _stopForegroundService() async {
+    if (!Platform.isAndroid) return;
+    try {
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.stopService();
+      }
+    } catch (_) {}
+  }
+
+  // ═══════════════════════════════════════════════════
+  //  8.  CONSTRAINT CHECKER
+  // ═══════════════════════════════════════════════════
+
   Future<bool> _checkConstraints(SharedPreferences prefs) async {
-    await prefs.reload(); // ✅ Catch UI toggles instantly
-    
-    bool isEnabled = prefs.getBool('backup_enabled') ?? false;
+    await prefs.reload();
+
+    final isEnabled = prefs.getBool('backup_enabled') ?? false;
     if (!isEnabled) {
       statusNotifier.value = "Backup Disabled";
+      phaseNotifier.value = BackupPhase.idle;
       return false;
     }
 
-    // ✅ FIXED WI-FI CHECK
-    bool wifiOnly = prefs.getBool('wifi_only') ?? true;
+    // Wi-Fi check
+    final wifiOnly = prefs.getBool('wifi_only') ?? true;
     if (wifiOnly) {
-      final connectivityResult = await Connectivity().checkConnectivity();
-      bool hasWifi = connectivityResult.contains(ConnectivityResult.wifi) || 
-                     connectivityResult.contains(ConnectivityResult.ethernet);
-      
+      final result = await Connectivity().checkConnectivity();
+      final hasWifi = result.contains(ConnectivityResult.wifi) ||
+          result.contains(ConnectivityResult.ethernet);
       if (!hasWifi) {
         statusNotifier.value = "Waiting for Wi-Fi...";
-        return false; 
+        phaseNotifier.value = BackupPhase.waitingWifi;
+        return false;
       }
     }
 
-    // ✅ FIXED CHARGING CHECK
-    bool chargingOnly = prefs.getBool('charging_only') ?? false;
+    // Charging check
+    final chargingOnly = prefs.getBool('charging_only') ?? false;
     if (chargingOnly) {
       final battery = await Battery().batteryState;
       if (battery != BatteryState.charging && battery != BatteryState.full) {
         statusNotifier.value = "Waiting for Charger...";
-        return false; 
+        phaseNotifier.value = BackupPhase.waitingCharger;
+        return false;
       }
     }
 
-    return true; 
+    return true;
   }
 
-  // ---------------------------------------------------------
-  // ENCRYPTION (ZERO-KNOWLEDGE)
-  // ---------------------------------------------------------
-  Future<File?> _createEncryptedTempFile(File original) async {
-    try {
-      final nonce = VaultService().generateNonce();
-      final key = await VaultService().getSecretKey();
-      final algo = AesGcm.with256bits();
+  // ═══════════════════════════════════════════════════
+  //  9.  HELPERS
+  // ═══════════════════════════════════════════════════
 
-      final bytes = await original.readAsBytes();
-      final box = await algo.encrypt(bytes, secretKey: key, nonce: nonce);
-      final encryptedBytes = box.cipherText + box.mac.bytes;
-
-      final dir = await getTemporaryDirectory();
-      final path = "${dir.path}/${original.uri.pathSegments.last}.enc";
-
-      final file = File(path);
-      await file.writeAsBytes(encryptedBytes);
-
-      _lastIV = base64Encode(nonce);
-      return file;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // ---------------------------------------------------------
-  // CHUNK UPLOAD
-  // ---------------------------------------------------------
-  Future<bool> _uploadChunkedFile(File file, String hash, String originalPath) async {
-    try {
-      final dioClient = dio.Dio();
-      final url = "${Env.backendBaseUrl}/api/upload-chunk";
-      // Use original filename, not the .enc one
-      final name = originalPath.split(Platform.pathSeparator).last;
-      final size = await file.length();
-
-      const chunkSize = 5 * 1024 * 1024;
-      final totalChunks = (size / chunkSize).ceil();
-      final uploadId = "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(999999)}";
-
-      final raf = file.openSync();
-      dio.Response? response;
-
-      for (int i = 0; i < totalChunks; i++) {
-        final start = i * chunkSize;
-        final end = min(start + chunkSize, size);
-        final length = end - start;
-
-        raf.setPositionSync(start);
-        final chunk = raf.readSync(length);
-
-        int retry = 0;
-        bool ok = false;
-
-        while (!ok && retry < 3) {
-          try {
-            response = await dioClient.post(
-              url,
-              data: dio.FormData.fromMap({
-                "file": dio.MultipartFile.fromBytes(chunk, filename: name),
-                "chunk_index": i,
-                "total_chunks": totalChunks,
-                "file_name": name,
-                "upload_id": uploadId,
-              }),
-            );
-            ok = true;
-          } catch (_) {
-            retry++;
-            await Future.delayed(const Duration(seconds: 2));
-          }
-        }
-
-        if (!ok) {
-          raf.closeSync();
-          return false;
-        }
-      }
-
-      raf.closeSync();
-
-      if (response?.statusCode == 200) {
-        await _saveToSupabase(response!.data, name, size, hash, _lastIV);
-        return true;
-      }
-
-      return false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  // ---------------------------------------------------------
-  // SAVE METADATA
-  // ---------------------------------------------------------
-  Future<void> _saveToSupabase(
-    Map data,
-    String name,
-    int size,
-    String hash,
-    String? iv,
-  ) async {
-    await Supabase.instance.client.from('files').insert({
-      'user_id': Supabase.instance.client.auth.currentUser!.id,
-      'file_id': data['file_id'],
-      'message_id': data['message_id'],
-      'name': name,
-      'type': _getFileType(name), // ✅ UPDATED to match your requested logic
-      'size': size,
-      'hash': hash,
-      'iv': iv,
-      'folder_id': null,
-    });
-  }
-
-  // ---------------------------------------------------------
-  // HELPERS
-  // ---------------------------------------------------------
+  /// Sync file hashes from the server (once per session)
   Future<void> _syncServerState(String userId) async {
     if (_hasSyncedWithServer) return;
 
@@ -412,29 +881,41 @@ class BackupService {
     _hasSyncedWithServer = true;
   }
 
-  Future<String> _getFileHash(File file) async {
-    final stream = file.openRead();
-    return (await sha256.bind(stream).first).toString();
+  /// Deterministic per-chunk nonce derivation
+  List<int> _buildChunkNonce(List<int> baseNonce, int index) {
+    final nonce = List<int>.from(baseNonce);
+    nonce[8] = (index >> 24) & 0xFF;
+    nonce[9] = (index >> 16) & 0xFF;
+    nonce[10] = (index >> 8) & 0xFF;
+    nonce[11] = index & 0xFF;
+    return nonce;
   }
 
-  // ✅ Consistent File Type Logic
   String _getFileType(String fileName) {
     final ext = fileName.split('.').last.toLowerCase();
-
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'].contains(ext)) return 'image';
-    if (['mp4', 'mov', 'avi', 'mkv', 'webm'].contains(ext)) return 'video';
-    if (['mp3', 'wav', 'aac', 'flac'].contains(ext)) return 'music';
-    
-    // Explicitly grouping docs & apps together so they show up in your folders
-    if (['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'csv', 'apk', 'exe', 'dmg', 'zip', 'rar'].contains(ext)) {
-      return 'document';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'].contains(ext)) {
+      return 'image';
     }
-
+    if (['mp4', 'mov', 'avi', 'mkv', 'webm'].contains(ext)) return 'video';
+    if (['mp3', 'wav', 'aac', 'flac', 'm4a'].contains(ext)) return 'music';
     return 'document';
   }
 
-  void _stop(String msg) {
+  void _finish(String msg) {
     _isBackingUp = false;
     statusNotifier.value = msg;
+    phaseNotifier.value = BackupPhase.idle;
+  }
+
+  /// Force a full re-scan (clears delta timestamp)
+  Future<void> resetBackupState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('last_backup_timestamp');
+    await prefs.remove('uploaded_assets');
+    _serverHashes.clear();
+    _hasSyncedWithServer = false;
+    _consecutiveIdleRuns = 0;
+    statusNotifier.value = "Reset — ready to re-scan";
+    phaseNotifier.value = BackupPhase.idle;
   }
 }
