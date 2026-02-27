@@ -78,168 +78,113 @@ Future<void> pickFiles() async {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: manager,
-      builder: (context, child) {
-        return PopScope(
-          // Prevent back button while preparing data to avoid crashes
-          canPop: !_isPreparing, 
-          child: Scaffold(
-            backgroundColor: AppColors.bg,
-            appBar: AppBar(
-              backgroundColor: Colors.transparent,
-              elevation: 0,
-              leading: const BackButton(color: Colors.black),
-              title: const Text("Upload Files", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-              centerTitle: true,
-              actions: [
-                if (manager.uploadQueue.isNotEmpty && !_isPreparing)
-                  IconButton(
+    // Static shell — never rebuilds on upload progress changes
+    return PopScope(
+      canPop: !_isPreparing,
+      child: Scaffold(
+        backgroundColor: AppColors.bg,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: const BackButton(color: Colors.black),
+          title: const Text("Upload Files", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          centerTitle: true,
+          actions: [
+            // Only the "+" button listens
+            ListenableBuilder(
+              listenable: manager,
+              builder: (context, _) {
+                if (manager.uploadQueue.isNotEmpty && !_isPreparing) {
+                  return IconButton(
                     icon: const Icon(Icons.add_circle_outline, color: AppColors.blue),
                     onPressed: pickFiles,
-                  )
-              ],
+                  );
+                }
+                return const SizedBox.shrink();
+              },
             ),
-            body: Stack(
-              children: [
-                // Background decoration
-                Positioned(
-                  top: -100, right: -50,
-                  child: CircleAvatar(radius: 150, backgroundColor: AppColors.blue.withOpacity(0.15)),
-                ),
+          ],
+        ),
+        body: Stack(
+          children: [
+            // Background decoration — const, never rebuilds
+            Positioned(
+              top: -100, right: -50,
+              child: CircleAvatar(radius: 150, backgroundColor: AppColors.blue.withOpacity(0.15)),
+            ),
 
-                // Main Content
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-                  child: Column(
-                    children: [
-                      // 📂 Folder Info Badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[100],
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
+            // Main Content
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+              child: Column(
+                children: [
+                  // 📂 Folder Info Badge — static text
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.folder_open, size: 16, color: Colors.grey[600]),
+                        const SizedBox(width: 8),
+                        Text("Uploading to: ", style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+                        Text(manager.currentFolderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // 📋 Only list + button listen to manager changes
+                  ListenableBuilder(
+                    listenable: manager,
+                    builder: (context, _) {
+                      if (_isPreparing) {
+                        return const Spacer();
+                      }
+                      if (manager.uploadQueue.isEmpty) {
+                        return _buildEmptyState();
+                      }
+                      return Expanded(
+                        child: Column(
                           children: [
-                            Icon(Icons.folder_open, size: 16, color: Colors.grey[600]),
-                            const SizedBox(width: 8),
-                            Text("Uploading to: ", style: TextStyle(color: Colors.grey[600], fontSize: 13)),
-                            Text(manager.currentFolderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                            Expanded(
+                              child: ListView.separated(
+                                itemCount: manager.uploadQueue.length,
+                                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                                addAutomaticKeepAlives: false,
+                                addRepaintBoundaries: true,
+                                itemBuilder: (context, index) {
+                                  final item = manager.uploadQueue[index];
+                                  return RepaintBoundary(
+                                    key: ValueKey(item.id),
+                                    child: _buildUploadTile(item),
+                                  );
+                                },
+                              ),
+                            ),
+                            // 🚀 Action Button
+                            _buildActionButton(),
                           ],
                         ),
-                      ),
-                      const SizedBox(height: 20),
-
-                      // 📋 Empty State or List
-                      if (manager.uploadQueue.isEmpty && !_isPreparing)
-                        Expanded(
-                          child: Center(
-                            child: GestureDetector(
-                              onTap: pickFiles,
-                              child: Container(
-                                height: 220,
-                                width: double.infinity,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(24),
-                                  border: Border.all(color: AppColors.blue.withOpacity(0.3), width: 2),
-                                  boxShadow: [BoxShadow(color: AppColors.blue.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, 10))],
-                                ),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    CircleAvatar(
-                                      radius: 40,
-                                      backgroundColor: AppColors.blue.withOpacity(0.1),
-                                      child: const Icon(Icons.cloud_upload_rounded, size: 40, color: AppColors.blue),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    const Text("Tap to select files", 
-                                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text("Select multiple images, videos, or docs", style: TextStyle(fontSize: 14, color: Colors.grey[500])),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        )
-                      else if (!_isPreparing)
-                        Expanded(
-                          child: ListView.separated(
-                            itemCount: manager.uploadQueue.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 12),
-                            itemBuilder: (context, index) {
-                              final item = manager.uploadQueue[index];
-                              return _buildUploadTile(item);
-                            },
-                          ),
-                        )
-                      else 
-                        const Spacer(), // Keeps layout consistent during preparation
-
-                      // 🚀 Action Button
-                      if (manager.uploadQueue.isNotEmpty && !_isPreparing) ...[
-                        const SizedBox(height: 16),
-                        (() {
-                          final allDone = manager.uploadQueue.every((item) => 
-                            item.status == 'done' || item.status == 'exists' || item.status == 'cancelled'
-                          );
-                          final hasPaused = manager.uploadQueue.any((item) =>
-                            item.status == 'paused'
-                          );
-                          
-                          return SizedBox(
-                            width: double.infinity,
-                            height: 56,
-                            child: ElevatedButton.icon(
-                              onPressed: manager.isUploading 
-                                  ? () => Navigator.pop(context) 
-                                  : (allDone 
-                                      ? () {
-                                          manager.clearCompleted();
-                                          Navigator.pop(context);
-                                        } 
-                                      : hasPaused
-                                        ? manager.resumeAll
-                                        : manager.startBatchUpload),
-                              icon: Icon(
-                                allDone ? Icons.check : (hasPaused ? Icons.play_arrow_rounded : Icons.cloud_upload_rounded),
-                                size: 22,
-                              ),
-                              label: Text(
-                                manager.isUploading 
-                                    ? "Uploading..."
-                                    : allDone 
-                                      ? "Done" 
-                                      : hasPaused
-                                        ? "Resume ${manager.uploadQueue.where((item) => item.status == 'paused').length} Paused"
-                                        : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet').length} Files",
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: allDone ? Colors.green : (hasPaused ? Colors.orange : AppColors.blue),
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                              ),
-                            ),
-                          );
-                        }()),
-                      ],
-                    ],
+                      );
+                    },
                   ),
-                ),
+                ],
+              ),
+            ),
 
-                // ✅ THE PREPARING OVERLAY (Shows on top of everything)
-                if (_isPreparing)
-                  Container(
+            // ✅ THE PREPARING OVERLAY (Shows on top of everything)
+            if (_isPreparing)
+              ListenableBuilder(
+                listenable: manager,
+                builder: (context, _) {
+                  return Container(
                     width: double.infinity,
                     height: double.infinity,
-                    color: Colors.black.withOpacity(0.05), // Subtle dimming
+                    color: Colors.black.withOpacity(0.05),
                     child: Center(
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
@@ -260,7 +205,6 @@ Future<void> pickFiles() async {
                               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87),
                             ),
                             const SizedBox(height: 8),
-                            // Show the file counter from the manager
                             Text(
                               "Processing: ${manager.filesProcessed} of ${manager.totalFilesToProcess}",
                               style: TextStyle(color: Colors.grey[600], fontSize: 13),
@@ -269,12 +213,99 @@ Future<void> pickFiles() async {
                         ),
                       ),
                     ),
-                  ),
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ================= Extracted Widgets =================
+
+  Widget _buildEmptyState() {
+    return Expanded(
+      child: Center(
+        child: GestureDetector(
+          onTap: pickFiles,
+          child: Container(
+            height: 220,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: AppColors.blue.withOpacity(0.3), width: 2),
+              boxShadow: [BoxShadow(color: AppColors.blue.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, 10))],
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircleAvatar(
+                  radius: 40,
+                  backgroundColor: AppColors.blue.withOpacity(0.1),
+                  child: const Icon(Icons.cloud_upload_rounded, size: 40, color: AppColors.blue),
+                ),
+                const SizedBox(height: 16),
+                const Text("Tap to select files", 
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)
+                ),
+                const SizedBox(height: 4),
+                Text("Select multiple images, videos, or docs", style: TextStyle(fontSize: 14, color: Colors.grey[500])),
               ],
             ),
           ),
-        );
-      },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionButton() {
+    final allDone = manager.uploadQueue.every((item) => 
+      item.status == 'done' || item.status == 'exists' || item.status == 'cancelled'
+    );
+    final hasPaused = manager.uploadQueue.any((item) =>
+      item.status == 'paused'
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: SizedBox(
+        width: double.infinity,
+        height: 56,
+        child: ElevatedButton.icon(
+          onPressed: manager.isUploading 
+              ? () => Navigator.pop(context) 
+              : (allDone 
+                  ? () {
+                      manager.clearCompleted();
+                      Navigator.pop(context);
+                    } 
+                  : hasPaused
+                    ? manager.resumeAll
+                    : manager.startBatchUpload),
+          icon: Icon(
+            allDone ? Icons.check : (hasPaused ? Icons.play_arrow_rounded : Icons.cloud_upload_rounded),
+            size: 22,
+          ),
+          label: Text(
+            manager.isUploading 
+                ? "Uploading..."
+                : allDone 
+                  ? "Done" 
+                  : hasPaused
+                    ? "Resume ${manager.uploadQueue.where((item) => item.status == 'paused').length} Paused"
+                    : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet').length} Files",
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: allDone ? Colors.green : (hasPaused ? Colors.orange : AppColors.blue),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          ),
+        ),
+      ),
     );
   }
 

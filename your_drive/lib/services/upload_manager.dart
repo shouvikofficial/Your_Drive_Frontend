@@ -123,7 +123,39 @@ class UploadManager extends ChangeNotifier {
   static const int _maxActiveChunks = 8;
   int _activeChunks = 0;
 
+  // ================= Throttle & Debounce =================
   DateTime _lastUiUpdate = DateTime.now();
+  Timer? _persistDebounce;
+  bool _persistScheduled = false;
+
+  /// Throttled notify — prevents more than ~1 rebuild per 800ms during uploads
+  void _throttledNotify() {
+    final now = DateTime.now();
+    if (now.difference(_lastUiUpdate).inMilliseconds > 800) {
+      _lastUiUpdate = now;
+      notifyListeners();
+    }
+  }
+
+  /// Debounced persist — batches disk writes, max once per 5s during upload
+  void _debouncedPersist() {
+    if (_persistScheduled) return;
+    _persistScheduled = true;
+    _persistDebounce?.cancel();
+    _persistDebounce = Timer(const Duration(seconds: 5), () {
+      _persistScheduled = false;
+      _persistQueue();
+    });
+  }
+
+  /// Immediate persist + notify — for important state changes (done, error, cancel)
+  void _immediateSync() {
+    _lastUiUpdate = DateTime.now();
+    notifyListeners();
+    _persistDebounce?.cancel();
+    _persistScheduled = false;
+    _persistQueue();
+  }
 
   static const String _queueKey = 'upload_queue';
   static const String _folderIdKey = 'upload_folder_id';
@@ -409,14 +441,14 @@ bool _isNoInternetError(Object e) {
 Future<void> _uploadSingleItemParallel(UploadItem item) async {
   item.status = 'preparing';
   item.cancelToken = dio.CancelToken();
-  notifyListeners();
+  _throttledNotify();
 
   final supabase = Supabase.instance.client;
   final user = supabase.auth.currentUser;
 
   if (user == null) {
     item.status = 'error';
-    notifyListeners();
+    _immediateSync();
     return;
   }
 
@@ -484,14 +516,14 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
       if (existing != null) {
         item.progress = 1.0;
         item.status = 'exists';
-        notifyListeners();
+        _immediateSync();
         return;
       }
     }
 
     // ---------- Encryption context ----------
       item.status = 'encrypting';
-      notifyListeners();
+      _throttledNotify();
       
       final key = await VaultService().getSecretKey();
       final keyBytes = await key.extractBytes();
@@ -522,7 +554,7 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
       item.fileHash = fileHash;
       item.chunkSize = chunkSize;
       item.totalChunks = totalChunks;
-      await _persistQueue(); // Save so resume works if app dies during upload
+      _debouncedPersist(); // Save resume context (debounced — not blocking)
 
       RandomAccessFile? raf;
       if (item.file != null) {
@@ -531,7 +563,7 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
 
       item.status = 'uploading';
       item.progress = totalChunks > 0 ? uploadedChunks / totalChunks : 0.0;
-      notifyListeners();
+      _throttledNotify();
 
       debugPrint('[UploadManager] ${isResume ? "RESUMING" : "Starting"} ${item.name}: chunk $uploadedChunks/$totalChunks');
 
@@ -618,17 +650,12 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
           }
 
           uploadedChunks++;
-          await ResumeStore.saveProgress(item.uploadId!, uploadedChunks);
+          ResumeStore.saveProgress(item.uploadId!, uploadedChunks); // fire-and-forget
 
           item.progress = uploadedChunks / totalChunks;
 
-          // 🔥 Throttle UI updates
-          final now = DateTime.now();
-          if (now.difference(_lastUiUpdate).inMilliseconds > 300 ||
-              uploadedChunks == totalChunks) {
-            _lastUiUpdate = now;
-            notifyListeners();
-          }
+          // 🔥 Throttled UI update — shared across all parallel files
+          _throttledNotify();
         } finally {
           _activeChunks--;
         }
@@ -689,22 +716,18 @@ if (thumbnailFuture != null) {
       item.chunkSize = null;
       item.totalChunks = null;
       item.progress = 1.0;
-item.status = 'done';
-notifyListeners();
-_persistQueue();
-
-
+      item.status = 'done';
+      _immediateSync(); // important state change — notify + persist now
 
     } on dio.DioException catch (e) {
       item.status = dio.CancelToken.isCancel(e)
           ? 'cancelled'
           : (_isNoInternetError(e) ? 'no_internet' : 'error');
+      _immediateSync();
     } catch (e) {
       debugPrint("Upload error: $e");
       item.status = _isNoInternetError(e) ? 'no_internet' : 'error';
-    } finally {
-      notifyListeners();
-      _persistQueue();
+      _immediateSync();
     }
   }
 
