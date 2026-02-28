@@ -658,7 +658,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
                   return Container(
                     width: 90, height: 90,
                     decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(16)),
-                    child: Center(child: _FileIcon(type: file['type'] ?? '', size: 42)),
+                    child: Center(child: _FileIcon(type: file['type'] ?? '', size: 42, fileName: file['name'])),
                   );
                 },
               ),
@@ -757,7 +757,7 @@ class _FileCardState extends State<_FileCard> {
                       }
 
                       return Center(
-                        child: _FileIcon(type: widget.file['type'], size: 48),
+                        child: _FileIcon(type: widget.file['type'], size: 48, fileName: widget.file['name']),
                       );
                     },
                   ),
@@ -873,7 +873,7 @@ class _FileListItemState extends State<_FileListItem> {
                     return Container(
                       color: Colors.grey[100],
                       padding: const EdgeInsets.all(14),
-                      child: _FileIcon(type: widget.file['type'], size: 24),
+                      child: _FileIcon(type: widget.file['type'], size: 24, fileName: widget.file['name']),
                     );
                   },
                 ),
@@ -971,34 +971,138 @@ class _FileListItemState extends State<_FileListItem> {
 class _FileIcon extends StatelessWidget {
   final String type;
   final double size;
+  final String? fileName;
 
-  const _FileIcon({required this.type, required this.size});
+  const _FileIcon({required this.type, required this.size, this.fileName});
 
   @override
   Widget build(BuildContext context) {
-    IconData icon;
-    Color color;
-
     switch (type.toLowerCase()) {
       case 'image':
-        icon = Icons.image_rounded;
-        color = AppColors.blue;
-        break;
+        return Icon(Icons.image_rounded, size: size, color: AppColors.blue);
       case 'video':
-        icon = Icons.play_circle_filled_rounded;
-        color = Colors.purple;
-        break;
+        return Icon(Icons.play_circle_filled_rounded, size: size, color: Colors.purple);
       case 'music':
-        icon = Icons.music_note_rounded;
-        color = Colors.orange;
-        break;
+        return Icon(Icons.music_note_rounded, size: size, color: Colors.orange);
+      case 'document':
+        return _buildDocIcon();
       default:
-        icon = Icons.insert_drive_file_rounded;
-        color = Colors.grey[600]!;
+        return Icon(Icons.insert_drive_file_rounded, size: size, color: Colors.grey[600]);
+    }
+  }
+
+  Widget _buildDocIcon() {
+    final ext = _extFromName(fileName);
+    final info = _docInfo(ext);
+
+    // For extensions that have a recognizable label, show a styled badge
+    if (info.label != null) {
+      final badgeSize = size * 1.1;
+      final fontSize = (size * 0.28).clamp(8.0, 16.0);
+      final radius = size * 0.18;
+
+      return SizedBox(
+        width: badgeSize,
+        height: badgeSize,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // Background file shape
+            Icon(Icons.insert_drive_file, size: size, color: Colors.grey[300]),
+            // Colored label at the bottom
+            Positioned(
+              bottom: size * 0.05,
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: size * 0.1,
+                  vertical: size * 0.04,
+                ),
+                decoration: BoxDecoration(
+                  color: info.color,
+                  borderRadius: BorderRadius.circular(radius),
+                ),
+                child: Text(
+                  info.label!,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
-    return Icon(icon, size: size, color: color);
+    // Fallback: just an icon
+    return Icon(info.icon, size: size, color: info.color);
   }
+
+  static String _extFromName(String? name) {
+    if (name == null || !name.contains('.')) return '';
+    return name.split('.').last.toLowerCase();
+  }
+
+  static _DocInfo _docInfo(String ext) {
+    switch (ext) {
+      case 'pdf':
+        return _DocInfo(label: 'PDF', color: const Color(0xFFE53935), icon: Icons.picture_as_pdf_rounded);
+      case 'doc':
+      case 'docx':
+        return _DocInfo(label: 'DOC', color: const Color(0xFF2B579A), icon: Icons.description_rounded);
+      case 'xls':
+      case 'xlsx':
+        return _DocInfo(label: 'XLS', color: const Color(0xFF217346), icon: Icons.table_chart_rounded);
+      case 'csv':
+        return _DocInfo(label: 'CSV', color: const Color(0xFF217346), icon: Icons.table_chart_rounded);
+      case 'ppt':
+      case 'pptx':
+        return _DocInfo(label: 'PPT', color: const Color(0xFFD24726), icon: Icons.slideshow_rounded);
+      case 'txt':
+        return _DocInfo(label: 'TXT', color: Colors.blueGrey, icon: Icons.article_rounded);
+      case 'log':
+        return _DocInfo(label: 'LOG', color: Colors.blueGrey, icon: Icons.article_rounded);
+      case 'zip':
+        return _DocInfo(label: 'ZIP', color: Colors.amber.shade700, icon: Icons.folder_zip_rounded);
+      case 'rar':
+        return _DocInfo(label: 'RAR', color: Colors.amber.shade700, icon: Icons.folder_zip_rounded);
+      case '7z':
+        return _DocInfo(label: '7Z', color: Colors.amber.shade700, icon: Icons.folder_zip_rounded);
+      case 'tar':
+      case 'gz':
+        return _DocInfo(label: ext.toUpperCase(), color: Colors.amber.shade700, icon: Icons.folder_zip_rounded);
+      case 'html':
+      case 'htm':
+        return _DocInfo(label: 'HTML', color: const Color(0xFFE44D26), icon: Icons.code_rounded);
+      case 'css':
+        return _DocInfo(label: 'CSS', color: const Color(0xFF264DE4), icon: Icons.code_rounded);
+      case 'js':
+        return _DocInfo(label: 'JS', color: const Color(0xFFF7DF1E), icon: Icons.code_rounded);
+      case 'json':
+        return _DocInfo(label: 'JSON', color: Colors.indigo, icon: Icons.code_rounded);
+      case 'xml':
+        return _DocInfo(label: 'XML', color: Colors.indigo, icon: Icons.code_rounded);
+      case 'apk':
+        return _DocInfo(label: 'APK', color: const Color(0xFF3DDC84), icon: Icons.android_rounded);
+      case 'exe':
+        return _DocInfo(label: 'EXE', color: Colors.blueGrey, icon: Icons.desktop_windows_rounded);
+      case 'msi':
+        return _DocInfo(label: 'MSI', color: Colors.blueGrey, icon: Icons.desktop_windows_rounded);
+      default:
+        return _DocInfo(label: null, color: Colors.teal, icon: Icons.description_rounded);
+    }
+  }
+}
+
+class _DocInfo {
+  final String? label;
+  final Color color;
+  final IconData icon;
+  const _DocInfo({required this.label, required this.color, required this.icon});
 }
 
 class _InfoRow extends StatelessWidget {
