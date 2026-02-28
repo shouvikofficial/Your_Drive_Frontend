@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 
 class SafService {
@@ -32,5 +33,21 @@ class SafService {
 
     if (result == null) return null;
     return List<int>.from(result);
+  }
+
+  /// 🎬 Get video thumbnail natively from SAF content URI
+  /// Uses Android's MediaMetadataRetriever — works with content:// URIs
+  /// without needing to copy the entire file.
+  static Future<Uint8List?> getVideoThumbnail(String uri) async {
+    try {
+      final result = await _channel.invokeMethod(
+        'getSafVideoThumbnail',
+        {"uri": uri},
+      );
+      if (result == null) return null;
+      return Uint8List.fromList(List<int>.from(result));
+    } catch (e) {
+      return null;
+    }
   }
 }

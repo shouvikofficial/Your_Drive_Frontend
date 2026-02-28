@@ -328,7 +328,7 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                "Storage",
+                "Vault",
                 style: TextStyle(
                   fontSize: 14,
                   color: Colors.grey[600],
@@ -337,7 +337,7 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
               ),
               const SizedBox(height: 4),
               const Text(
-                "My Cloud",
+                "Cloud Guard",
                 style: TextStyle(
                   fontSize: 32,
                   fontWeight: FontWeight.w800,
@@ -496,7 +496,7 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
           Expanded(
               child: CategoryCard(
                   icon: Icons.description_rounded,
-                  title: "Documents",
+                  title: "Doc",
                   percent: "$docCount files",
                   color: Colors.teal,
                   onTap: () => _navToPage(const FilesPage(type: 'document')))),

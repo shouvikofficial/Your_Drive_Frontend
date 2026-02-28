@@ -278,33 +278,35 @@ class UploadManager extends ChangeNotifier {
   String fileName,
 ) async {
   try {
+    final fileType = _getFileType(fileName);
+
+    // 🎬 For videos: use native Android MediaMetadataRetriever
+    // which reads directly from content:// URI — no need to copy
+    // the entire file (fixes truncated-file thumbnail failure).
+    if (fileType == 'video') {
+      final thumb = await SafService.getVideoThumbnail(uri);
+      if (thumb != null) return thumb;
+      debugPrint("SAF native video thumbnail returned null, skipping");
+      return null;
+    }
+
+    // 🖼️ For images: read first 10MB (always enough for images)
     final tempDir = await getTemporaryDirectory();
     final tempPath = "${tempDir.path}/temp_$fileName";
 
-    // 1️⃣ Read full SAF file
     final bytes = await SafService.readChunk(
       uri: uri,
       offset: 0,
-      length: 1024 * 1024 * 10, // read first 10MB (enough for thumbnail)
+      length: 1024 * 1024 * 10,
     );
 
     if (bytes == null) return null;
 
-    // 2️⃣ Save to temp file
     final tempFile = File(tempPath);
     await tempFile.writeAsBytes(bytes);
 
-    Uint8List? thumb;
+    final thumb = await generateImageThumbnail(tempPath);
 
-    final fileType = _getFileType(fileName);
-
-    if (fileType == 'image') {
-      thumb = await generateImageThumbnail(tempPath);
-    } else if (fileType == 'video') {
-      thumb = await generateVideoThumbnail(tempPath);
-    }
-
-    // 3️⃣ Delete temp file
     await tempFile.delete();
 
     return thumb;

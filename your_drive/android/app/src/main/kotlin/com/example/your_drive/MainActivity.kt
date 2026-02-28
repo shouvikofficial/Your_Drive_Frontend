@@ -1,12 +1,15 @@
 package com.example.your_drive
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.result.contract.ActivityResultContracts
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
 class MainActivity : FlutterFragmentActivity() {
@@ -96,6 +99,45 @@ class MainActivity : FlutterFragmentActivity() {
                     } catch (e: Exception) {
                         result.error("STREAM_ERROR", e.message, null)
                     }
+                }
+
+                // 🔹 Get video thumbnail natively from SAF content URI
+                "getSafVideoThumbnail" -> {
+                    val uriString = call.argument<String>("uri")!!
+
+                    Thread {
+                        try {
+                            val uri = Uri.parse(uriString)
+                            val retriever = MediaMetadataRetriever()
+                            retriever.setDataSource(applicationContext, uri)
+
+                            val frame = retriever.getFrameAtTime(1000000) // 1 second
+                                ?: retriever.getFrameAtTime(0)           // fallback to first frame
+                            retriever.release()
+
+                            if (frame != null) {
+                                val maxWidth = 300
+                                val scale = maxWidth.toFloat() / frame.width
+                                val scaledHeight = (frame.height * scale).toInt()
+                                val scaled = Bitmap.createScaledBitmap(
+                                    frame, maxWidth, scaledHeight, true
+                                )
+
+                                val stream = ByteArrayOutputStream()
+                                scaled.compress(Bitmap.CompressFormat.JPEG, 70, stream)
+
+                                if (scaled !== frame) scaled.recycle()
+                                frame.recycle()
+
+                                val bytes = stream.toByteArray()
+                                runOnUiThread { result.success(bytes) }
+                            } else {
+                                runOnUiThread { result.success(null) }
+                            }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.success(null) }
+                        }
+                    }.start()
                 }
 
                 else -> result.notImplemented()
