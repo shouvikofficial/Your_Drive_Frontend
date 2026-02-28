@@ -12,6 +12,7 @@ import 'files_page.dart';
 import 'create_folder_page.dart';
 import 'notification_list_page.dart';
 import 'upload_page.dart'; // ✅ Import UploadPage for navigation
+import 'search_page.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -440,24 +441,39 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
 }
 
   Widget _buildSearchBar() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(0.03),
-              blurRadius: 15,
-              offset: const Offset(0, 8))
-        ],
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => const SearchPage(),
+          transitionsBuilder: (_, anim, __, child) =>
+              FadeTransition(opacity: anim, child: child),
+          transitionDuration: const Duration(milliseconds: 250),
+        ),
       ),
-      child: TextField(
-        decoration: InputDecoration(
-          hintText: "Search your files...",
-          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 15),
-          prefixIcon: const Icon(Icons.search, color: AppColors.blue),
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 15),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.03),
+                blurRadius: 15,
+                offset: const Offset(0, 8))
+          ],
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.search, color: AppColors.blue, size: 22),
+            const SizedBox(width: 12),
+            Text(
+              "Search your files...",
+              style: TextStyle(color: Colors.grey[400], fontSize: 15),
+            ),
+            const Spacer(),
+            Icon(Icons.tune_rounded, color: Colors.grey[400], size: 20),
+          ],
         ),
       ),
     );

@@ -15,6 +15,8 @@ import '../config/env.dart';
 import '../services/vault_service.dart';
 import '../services/file_service.dart';
 import '../services/download_service.dart';
+import '../services/preview_cache_service.dart';
+import '../services/thumbnail_cache_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FileViewerPage — Google-Drive-style viewer with swipe navigation
@@ -126,6 +128,10 @@ class _FileViewerPageState extends State<FileViewerPage> {
     );
 
     if (confirmed == true && mounted) {
+      // Evict preview cache for this file
+      PreviewCacheService.instance.evict(file['message_id'].toString());
+      ThumbnailCacheService.instance.evict(file['id']);
+
       await FileService().deleteFile(
         messageId: file['message_id'],
         supabaseId: file['id'],
@@ -291,7 +297,8 @@ class _SingleFileViewer extends StatefulWidget {
   State<_SingleFileViewer> createState() => _SingleFileViewerState();
 }
 
-class _SingleFileViewerState extends State<_SingleFileViewer> {
+class _SingleFileViewerState extends State<_SingleFileViewer>
+    with AutomaticKeepAliveClientMixin {
   bool _isLoading = true;
   String _loadingStatus = 'Fetching metadata…';
   String? _error;
@@ -300,13 +307,19 @@ class _SingleFileViewerState extends State<_SingleFileViewer> {
   ChewieController? _chewieController;
   File? _tempFile;
 
+  /// Keep this page alive when swiped off-screen (Google Drive behaviour).
+  @override
+  bool get wantKeepAlive => true;
+
   String get _messageId => widget.file['message_id'].toString();
   String get _fileName => widget.file['name'] as String;
+
+  final _previewCache = PreviewCacheService.instance;
 
   @override
   void initState() {
     super.initState();
-    _downloadAndDecrypt();
+    _loadFromCacheOrDownload();
   }
 
   @override
@@ -316,7 +329,36 @@ class _SingleFileViewerState extends State<_SingleFileViewer> {
     super.dispose();
   }
 
-  // ─── Download + decrypt (with cache) ─────────────────────────────────────
+  // ─── Load from in-memory cache first, then disk, then network ───────────
+  Future<void> _loadFromCacheOrDownload() async {
+    try {
+      // ① Check in-memory image cache (instant — no I/O)
+      if (_isImage(_fileName)) {
+        final cached = _previewCache.getImage(_messageId);
+        if (cached != null) {
+          if (mounted) setState(() { _imageBytes = cached; _isLoading = false; });
+          return;
+        }
+      }
+
+      // ② Check in-memory file cache (video / document)
+      final cachedFile = _previewCache.getFile(_messageId);
+      if (cachedFile != null) {
+        if (mounted) setState(() => _loadingStatus = 'Opening from cache…');
+        await _openFile(cachedFile);
+        return;
+      }
+
+      // ③ Fall through to disk cache / network
+      await _downloadAndDecrypt();
+    } catch (e) {
+      if (mounted) {
+        setState(() { _error = e.toString(); _isLoading = false; });
+      }
+    }
+  }
+
+  // ─── Download + decrypt (with disk cache) ────────────────────────────────
   Future<void> _downloadAndDecrypt() async {
     try {
       final dir = await getTemporaryDirectory();
@@ -372,14 +414,19 @@ class _SingleFileViewerState extends State<_SingleFileViewer> {
   Future<void> _openFile(File file) async {
     if (_isImage(_fileName)) {
       final bytes = await file.readAsBytes();
+      // Store in memory cache for instant re-access
+      _previewCache.putImage(_messageId, bytes);
+      _previewCache.putFile(_messageId, file);
       if (mounted) setState(() { _imageBytes = bytes; _isLoading = false; });
     } else if (_isVideo(_fileName)) {
       if (mounted) setState(() => _loadingStatus = 'Preparing player…');
       _tempFile = file;
+      _previewCache.putFile(_messageId, file);
       await _initializeVideo();
     } else {
       if (mounted) setState(() => _loadingStatus = 'Opening file…');
       _tempFile = file;
+      _previewCache.putFile(_messageId, file);
       await OpenFilex.open(file.path);
       if (mounted) Navigator.pop(context);
     }
@@ -448,6 +495,7 @@ class _SingleFileViewerState extends State<_SingleFileViewer> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required by AutomaticKeepAliveClientMixin
     if (_isLoading) {
       return Center(child: _DecryptingIndicator(status: _loadingStatus));
     }
