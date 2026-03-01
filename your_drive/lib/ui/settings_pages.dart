@@ -1719,9 +1719,25 @@ class _EditProfilePageState extends State<EditProfilePage> {
   @override
   void initState() {
     super.initState();
-    _loadProfile();
+    _loadCachedProfile(); // Instant
+    _loadProfile();       // Fresh from server (silent)
   }
 
+  /// ⚡ Load instantly from cache — no network delay
+  Future<void> _loadCachedProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    final user = Supabase.instance.client.auth.currentUser;
+
+    if (mounted) {
+      setState(() {
+        _nameCtrl.text = prefs.getString('user_name') ?? '';
+        _emailCtrl.text = prefs.getString('user_email') ?? user?.email ?? '';
+        _originalEmail = _emailCtrl.text;
+      });
+    }
+  }
+
+  /// 🌍 Refresh from server (updates silently if different)
   Future<void> _loadProfile() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
@@ -1737,11 +1753,16 @@ class _EditProfilePageState extends State<EditProfilePage> {
         .maybeSingle();
 
     if (mounted) {
+      final serverName = profile?['name'] ?? '';
+      final serverEmail = user.email ?? profile?['email'] ?? '';
+      // Only update if different from cache (avoid cursor jump)
+      if (_nameCtrl.text != serverName) _nameCtrl.text = serverName;
+      if (_emailCtrl.text != serverEmail) {
+        _emailCtrl.text = serverEmail;
+        _originalEmail = serverEmail;
+      }
       setState(() {
         _isGoogleUser = isGoogle;
-        _nameCtrl.text = profile?['name'] ?? '';
-        _emailCtrl.text = user.email ?? profile?['email'] ?? '';
-        _originalEmail = _emailCtrl.text;
       });
     }
   }
