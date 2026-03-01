@@ -273,6 +273,27 @@ class UploadManager extends ChangeNotifier {
     _persistQueue();
     return item;
   }
+
+  // ================= Add Native File (Camera / Local) =================
+  Future<UploadItem> addNativeFile({
+    required File file,
+    String? folderId,
+    required String folderName,
+  }) async {
+    if (!isUploading) {
+      currentFolderId = folderId;
+      currentFolderName = folderName;
+    }
+
+    final name = file.path.split(Platform.pathSeparator).last;
+    final size = await file.length();
+
+    final item = UploadItem(file: file, name: name, size: size);
+    uploadQueue.add(item);
+    notifyListeners();
+    _persistQueue();
+    return item;
+  }
   Future<Uint8List?> _generateSafThumbnail(
   String uri,
   String fileName,
