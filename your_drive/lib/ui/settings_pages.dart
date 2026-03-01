@@ -1474,50 +1474,52 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
           shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(20)),
           title: Text(isNewPassword ? "Set Password" : "New Password"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                isNewPassword
-                    ? "Create a password so you can also sign in with your email."
-                    : "Enter your new password.",
-                style: TextStyle(color: Colors.grey[600], fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: newPassCtrl,
-                obscureText: obscure1,
-                decoration: InputDecoration(
-                  labelText: "New Password",
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                        obscure1 ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () =>
-                        setDialogState(() => obscure1 = !obscure1),
-                  ),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isNewPassword
+                      ? "Create a password so you can also sign in with your email."
+                      : "Enter your new password.",
+                  style: TextStyle(color: Colors.grey[600], fontSize: 13),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: confirmCtrl,
-                obscureText: obscure2,
-                decoration: InputDecoration(
-                  labelText: "Confirm Password",
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                        obscure2 ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () =>
-                        setDialogState(() => obscure2 = !obscure2),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: newPassCtrl,
+                  obscureText: obscure1,
+                  decoration: InputDecoration(
+                    labelText: "New Password",
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                          obscure1 ? Icons.visibility_off : Icons.visibility),
+                      onPressed: () =>
+                          setDialogState(() => obscure1 = !obscure1),
+                    ),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                TextField(
+                  controller: confirmCtrl,
+                  obscureText: obscure2,
+                  decoration: InputDecoration(
+                    labelText: "Confirm Password",
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                          obscure2 ? Icons.visibility_off : Icons.visibility),
+                      onPressed: () =>
+                          setDialogState(() => obscure2 = !obscure2),
+                    ),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -1594,48 +1596,50 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
           shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(20)),
           title: const Text("Change Password"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                "Enter a new password for your account.",
-                style: TextStyle(color: Colors.grey[600], fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: newPassCtrl,
-                obscureText: obscure1,
-                decoration: InputDecoration(
-                  labelText: "New Password",
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                        obscure1 ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () =>
-                        setDialogState(() => obscure1 = !obscure1),
-                  ),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "Enter a new password for your account.",
+                  style: TextStyle(color: Colors.grey[600], fontSize: 13),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: confirmCtrl,
-                obscureText: obscure2,
-                decoration: InputDecoration(
-                  labelText: "Confirm Password",
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                        obscure2 ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () =>
-                        setDialogState(() => obscure2 = !obscure2),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: newPassCtrl,
+                  obscureText: obscure1,
+                  decoration: InputDecoration(
+                    labelText: "New Password",
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                          obscure1 ? Icons.visibility_off : Icons.visibility),
+                      onPressed: () =>
+                          setDialogState(() => obscure1 = !obscure1),
+                    ),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                TextField(
+                  controller: confirmCtrl,
+                  obscureText: obscure2,
+                  decoration: InputDecoration(
+                    labelText: "Confirm Password",
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                          obscure2 ? Icons.visibility_off : Icons.visibility),
+                      onPressed: () =>
+                          setDialogState(() => obscure2 = !obscure2),
+                    ),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
