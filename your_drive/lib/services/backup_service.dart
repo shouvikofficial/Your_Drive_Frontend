@@ -542,12 +542,17 @@ class BackupService {
 
       phaseNotifier.value = BackupPhase.uploading;
 
+      bool scanCompleted = false;
+
       while (_isBackingUp && !reachedOldFiles) {
         final batch = await recentAlbum.getAssetListPaged(
           page: currentPage,
           size: pageSize,
         );
-        if (batch.isEmpty) break;
+        if (batch.isEmpty) {
+          scanCompleted = true;
+          break;
+        }
 
         for (final asset in batch) {
           if (!_isBackingUp) break;
@@ -644,13 +649,19 @@ class BackupService {
       debugPrint("[Backup]   Skip (fail):   $skipUploadFail");
       debugPrint("[Backup] ══════════════════════════════════");
 
-      // Record timestamp for delta sync — ONLY when files were actually uploaded
-      if (uploadedCount > 0) {
+      // Record timestamp for delta sync — ONLY when the FULL scan completed.
+      // If the scan was interrupted (constraint failure, app killed, etc.)
+      // we must NOT save the timestamp, because older files may not have
+      // been reached yet. The uploadedIds cache still ensures already-
+      // processed files are fast-skipped on the next run.
+      if (scanCompleted) {
         await prefs.setInt(
           'last_backup_timestamp',
           DateTime.now().millisecondsSinceEpoch,
         );
-        debugPrint("[Backup] Saved delta timestamp");
+        debugPrint("[Backup] Full scan completed — saved delta timestamp");
+      } else {
+        debugPrint("[Backup] Scan incomplete — NOT saving delta timestamp");
       }
 
       if (_isBackingUp) {
@@ -1025,12 +1036,31 @@ class BackupService {
 
     debugPrint("[Backup] Syncing server state for user: $userId");
 
-    final res = await Supabase.instance.client
-        .from('files')
-        .select('hash')
-        .eq('user_id', userId);
+    // Paginate to fetch ALL hashes (Supabase default limit is 1000)
+    final Set<String> allHashes = {};
+    int from = 0;
+    const pageSize = 1000;
 
-    _serverHashes = (res as List).map((e) => e['hash'] as String).toSet();
+    while (true) {
+      final res = await Supabase.instance.client
+          .from('files')
+          .select('hash')
+          .eq('user_id', userId)
+          .range(from, from + pageSize - 1);
+
+      final rows = res as List;
+      if (rows.isEmpty) break;
+
+      for (final row in rows) {
+        final h = row['hash'];
+        if (h != null) allHashes.add(h as String);
+      }
+
+      if (rows.length < pageSize) break; // last page
+      from += pageSize;
+    }
+
+    _serverHashes = allHashes;
     _hasSyncedWithServer = true;
 
     debugPrint("[Backup] Server hashes loaded: ${_serverHashes.length} files already on server");
