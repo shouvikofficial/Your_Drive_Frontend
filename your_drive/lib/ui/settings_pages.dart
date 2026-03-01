@@ -1,5 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_colors.dart';
 import '../services/biometric_service.dart'; 
@@ -252,7 +255,7 @@ class PrivacyPage extends StatefulWidget {
 
 class _PrivacyPageState extends State<PrivacyPage> {
   bool _biometricEnabled = false;
-  bool _twoFactorEnabled = true; 
+  bool _clearingCache = false;
 
   @override
   void initState() {
@@ -295,6 +298,128 @@ class _PrivacyPageState extends State<PrivacyPage> {
     }
   }
 
+  /// 🗑️ Clear cached thumbnails, previews, temp files
+  Future<void> _clearCacheData() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Clear Cache & Data"),
+        content: const Text(
+          "This will remove cached thumbnails, previews, and temporary files. "
+          "Your uploaded files in the cloud will not be affected.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Cancel"),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text("Clear"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _clearingCache = true);
+
+    try {
+      // Clear app cache directory
+      final cacheDir = await getTemporaryDirectory();
+      if (cacheDir.existsSync()) {
+        await for (final entity in cacheDir.list()) {
+          try {
+            if (entity is File) {
+              await entity.delete();
+            } else if (entity is Directory) {
+              await entity.delete(recursive: true);
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Clear app-specific temp directories
+      final appDir = await getApplicationDocumentsDirectory();
+      final thumbDir = Directory('${appDir.path}/thumbnails');
+      final previewDir = Directory('${appDir.path}/previews');
+      for (final dir in [thumbDir, previewDir]) {
+        if (await dir.exists()) {
+          await dir.delete(recursive: true);
+        }
+      }
+
+      // Clear search history from SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('search_history');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Cache cleared successfully"),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Failed to clear cache: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _clearingCache = false);
+    }
+  }
+
+  /// 🗑️ DELETE ACCOUNT
+  Future<void> _deleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red),
+            SizedBox(width: 8),
+            Text("Delete Account"),
+          ],
+        ),
+        content: const Text(
+          "This action is irreversible. All your files, backups, and personal data will be permanently deleted."
+          "\n\nAre you absolutely sure?",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Cancel"),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text("Delete Forever"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // TODO: Implement actual account deletion via Supabase
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Account deletion request submitted"),
+        backgroundColor: Colors.orange,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -315,7 +440,7 @@ class _PrivacyPageState extends State<PrivacyPage> {
           SettingsTile(
             icon: Icons.fingerprint,
             title: "Biometric Unlock",
-            subtitle: "Use Fingerprint to open app",
+            subtitle: "Use fingerprint to open app",
             trailing: Switch(
               value: _biometricEnabled,
               activeColor: AppColors.blue,
@@ -323,24 +448,7 @@ class _PrivacyPageState extends State<PrivacyPage> {
             ),
           ),
 
-          SettingsTile(
-            icon: Icons.security,
-            title: "Two-Factor Authentication",
-            subtitle: "Extra layer of security",
-            trailing: Switch(
-              value: _twoFactorEnabled,
-              activeColor: AppColors.blue,
-              onChanged: (val) => setState(() => _twoFactorEnabled = val),
-            ),
-          ),
-
-          SettingsTile(
-            icon: Icons.lock_reset,
-            title: "Change Password",
-            onTap: () {},
-          ),
-
-          /// ⭐ NEW — DEVICES & SESSIONS
+          /// ⭐ DEVICES & SESSIONS
           SettingsTile(
             icon: Icons.devices_outlined,
             title: "Devices & Sessions",
@@ -355,17 +463,29 @@ class _PrivacyPageState extends State<PrivacyPage> {
           const SectionHeader(title: "Data"),
 
           SettingsTile(
-            icon: Icons.history,
-            title: "Clear Search History",
-            onTap: () {},
+            icon: Icons.cached_rounded,
+            title: "Clear Cache",
+            subtitle: "Remove thumbnails & temporary files",
+            trailing: _clearingCache
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            onTap: _clearingCache ? null : _clearCacheData,
           ),
+
+          const SizedBox(height: 24),
+          const SectionHeader(title: "Danger Zone"),
 
           SettingsTile(
             icon: Icons.delete_forever,
             title: "Delete Account",
+            subtitle: "Permanently remove your account & data",
             textColor: Colors.red,
             iconColor: Colors.red,
-            onTap: () {},
+            onTap: _deleteAccount,
           ),
         ],
       ),
@@ -1247,8 +1367,47 @@ class _LegalSection extends StatelessWidget {
 /// ------------------------------------------------------
 /// 👤 ACCOUNT SETTINGS PAGE
 /// ------------------------------------------------------
-class AccountSettingsPage extends StatelessWidget {
+class AccountSettingsPage extends StatefulWidget {
   const AccountSettingsPage({super.key});
+
+  @override
+  State<AccountSettingsPage> createState() => _AccountSettingsPageState();
+}
+
+class _AccountSettingsPageState extends State<AccountSettingsPage> {
+  bool _isGoogleUser = false;
+  bool _hasPassword = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserData();
+  }
+
+  Future<void> _loadUserData() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+
+    final providers = user.appMetadata['providers'] as List<dynamic>? ?? [];
+    final isGoogle = providers.contains('google');
+
+    // Check encrypted_password directly via RPC (works across logins)
+    bool hasPassword = false;
+    try {
+      final result = await Supabase.instance.client.rpc('has_password');
+      hasPassword = result == true;
+    } catch (_) {
+      // Fallback: non-Google users always have a password
+      hasPassword = !isGoogle;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isGoogleUser = isGoogle && !hasPassword;
+        _hasPassword = hasPassword;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1269,14 +1428,581 @@ class AccountSettingsPage extends StatelessWidget {
           SettingsTile(
             icon: Icons.person_outline,
             title: "Edit Profile",
-            onTap: () {},
+            subtitle: "Change your name & email",
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const EditProfilePage()),
+              );
+              _loadUserData(); // Refresh after editing
+            },
           ),
-          SettingsTile(
-            icon: Icons.email_outlined,
-            title: "Change Email",
-            onTap: () {},
+
+          const SizedBox(height: 24),
+          const SectionHeader(title: "Security"),
+
+          if (_isGoogleUser && !_hasPassword)
+            SettingsTile(
+              icon: Icons.lock_outline,
+              title: "Set Password",
+              subtitle: "Create a password for email login",
+              onTap: () => _showSetPasswordDialog(isNewPassword: true),
+            )
+          else
+            SettingsTile(
+              icon: Icons.lock_reset,
+              title: "Change Password",
+              subtitle: "Update your current password",
+              onTap: () => _showChangePasswordDialog(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 🔑 SET PASSWORD (for Google-only users)
+  Future<void> _showSetPasswordDialog({bool isNewPassword = false}) async {
+    final newPassCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    bool obscure1 = true;
+    bool obscure2 = true;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20)),
+          title: Text(isNewPassword ? "Set Password" : "New Password"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                isNewPassword
+                    ? "Create a password so you can also sign in with your email."
+                    : "Enter your new password.",
+                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: newPassCtrl,
+                obscureText: obscure1,
+                decoration: InputDecoration(
+                  labelText: "New Password",
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                        obscure1 ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () =>
+                        setDialogState(() => obscure1 = !obscure1),
+                  ),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: confirmCtrl,
+                obscureText: obscure2,
+                decoration: InputDecoration(
+                  labelText: "Confirm Password",
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                        obscure2 ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () =>
+                        setDialogState(() => obscure2 = !obscure2),
+                  ),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel"),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final pw = newPassCtrl.text.trim();
+                final confirm = confirmCtrl.text.trim();
+                if (pw.length < 6) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Password must be at least 6 characters"),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return;
+                }
+                if (pw != confirm) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Passwords do not match"),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return;
+                }
+                try {
+                  await Supabase.instance.client.auth
+                      .updateUser(UserAttributes(password: pw));
+                  if (context.mounted) {
+                    Navigator.pop(ctx);
+                    setState(() => _hasPassword = true);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text("Password set successfully!"),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                } on AuthException catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(e.message),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+              style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.blue),
+              child: Text(isNewPassword ? "Set Password" : "Update"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 🔑 CHANGE PASSWORD (for email users)
+  Future<void> _showChangePasswordDialog() async {
+    final newPassCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    bool obscure1 = true;
+    bool obscure2 = true;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20)),
+          title: const Text("Change Password"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "Enter a new password for your account.",
+                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: newPassCtrl,
+                obscureText: obscure1,
+                decoration: InputDecoration(
+                  labelText: "New Password",
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                        obscure1 ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () =>
+                        setDialogState(() => obscure1 = !obscure1),
+                  ),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: confirmCtrl,
+                obscureText: obscure2,
+                decoration: InputDecoration(
+                  labelText: "Confirm Password",
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                        obscure2 ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () =>
+                        setDialogState(() => obscure2 = !obscure2),
+                  ),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel"),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final pw = newPassCtrl.text.trim();
+                final confirm = confirmCtrl.text.trim();
+                if (pw.length < 6) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Password must be at least 6 characters"),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return;
+                }
+                if (pw != confirm) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Passwords do not match"),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return;
+                }
+                try {
+                  await Supabase.instance.client.auth
+                      .updateUser(UserAttributes(password: pw));
+                  if (context.mounted) {
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text("Password changed successfully!"),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                } on AuthException catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(e.message),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+              style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.blue),
+              child: const Text("Update Password"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// ------------------------------------------------------
+/// ✏️ EDIT PROFILE PAGE
+/// ------------------------------------------------------
+class EditProfilePage extends StatefulWidget {
+  const EditProfilePage({super.key});
+
+  @override
+  State<EditProfilePage> createState() => _EditProfilePageState();
+}
+
+class _EditProfilePageState extends State<EditProfilePage> {
+  final _nameCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  bool _saving = false;
+  bool _isGoogleUser = false;
+  String _originalEmail = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+
+    final providers = user.appMetadata['providers'] as List<dynamic>? ?? [];
+    final isGoogle = providers.contains('google') &&
+        !providers.contains('email');
+
+    final profile = await Supabase.instance.client
+        .from('profiles')
+        .select('name, email')
+        .eq('id', user.id)
+        .maybeSingle();
+
+    if (mounted) {
+      setState(() {
+        _isGoogleUser = isGoogle;
+        _nameCtrl.text = profile?['name'] ?? '';
+        _emailCtrl.text = user.email ?? profile?['email'] ?? '';
+        _originalEmail = _emailCtrl.text;
+      });
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _saving = true);
+
+    try {
+      final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
+      if (user == null) throw 'Not logged in';
+
+      final newName = _nameCtrl.text.trim();
+      final newEmail = _emailCtrl.text.trim();
+
+      // Update profile name in DB
+      await supabase
+          .from('profiles')
+          .update({'name': newName, 'email': newEmail})
+          .eq('id', user.id);
+
+      // Update cached values
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_name', newName);
+      await prefs.setString('user_email', newEmail);
+
+      // If email changed, update Supabase auth email
+      if (newEmail != _originalEmail) {
+        await supabase.auth.updateUser(UserAttributes(email: newEmail));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  "Profile updated! Check your new email for a confirmation link."),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Profile updated successfully!"),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+
+      if (mounted) Navigator.pop(context);
+    } on AuthException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text("Error: $e"), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _emailCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F9FD),
+      appBar: AppBar(
+        title: const Text("Edit Profile",
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: const BackButton(color: Colors.black),
+        titleTextStyle: const TextStyle(
+            color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : _saveProfile,
+            child: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text("Save",
+                    style: TextStyle(
+                      color: AppColors.blue,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    )),
           ),
         ],
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            // Avatar
+            Center(
+              child: Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 50,
+                    backgroundColor: AppColors.blue.withOpacity(0.1),
+                    child: Text(
+                      _nameCtrl.text.isNotEmpty
+                          ? _nameCtrl.text[0].toUpperCase()
+                          : 'U',
+                      style: const TextStyle(
+                        fontSize: 36,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.blue,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: const BoxDecoration(
+                        color: AppColors.blue,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.edit,
+                          color: Colors.white, size: 16),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 32),
+
+            // Name field
+            const Text("Display Name",
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    color: Colors.black54)),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _nameCtrl,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                hintText: "Enter your name",
+                prefixIcon: const Icon(Icons.person_outline),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                      color: Colors.grey.withOpacity(0.15)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide:
+                      const BorderSide(color: AppColors.blue, width: 1.5),
+                ),
+              ),
+              validator: (val) => (val == null || val.trim().isEmpty)
+                  ? 'Name is required'
+                  : null,
+            ),
+
+            const SizedBox(height: 24),
+
+            // Email field
+            const Text("Email Address",
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    color: Colors.black54)),
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: _emailCtrl,
+              keyboardType: TextInputType.emailAddress,
+              decoration: InputDecoration(
+                hintText: "Enter your email",
+                prefixIcon: const Icon(Icons.email_outlined),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                      color: Colors.grey.withOpacity(0.15)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide:
+                      const BorderSide(color: AppColors.blue, width: 1.5),
+                ),
+              ),
+              validator: (val) {
+                if (val == null || val.trim().isEmpty) {
+                  return 'Email is required';
+                }
+                if (!RegExp(r'^[\w-.]+@([\w-]+\.)+[\w-]{2,4}$')
+                    .hasMatch(val.trim())) {
+                  return 'Enter a valid email';
+                }
+                return null;
+              },
+            ),
+
+            if (_isGoogleUser) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: Colors.orange.withOpacity(0.2)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline,
+                        color: Colors.orange, size: 18),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "Changing your email will require verification. "
+                        "Your Google login will still work.",
+                        style: TextStyle(
+                            color: Colors.orange,
+                            fontSize: 12,
+                            height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

@@ -296,7 +296,12 @@ class _ProfilePageState extends State<ProfilePage> {
                         _buildProfileOption(
                           Icons.person_outline, 
                           "Account Settings", 
-                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AccountSettingsPage()))
+                          onTap: () async {
+                            await Navigator.push(context, MaterialPageRoute(builder: (_) => const AccountSettingsPage()));
+                            // Refresh profile when returning (picks up name/email changes)
+                            _loadCachedProfile();
+                            loadProfile();
+                          },
                         ),
                         _buildDivider(),
                         
