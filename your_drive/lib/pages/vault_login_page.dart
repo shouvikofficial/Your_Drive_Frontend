@@ -6,7 +6,6 @@ import '../services/vault_service.dart';
 import '../services/backup_service.dart';
 import '../theme/app_colors.dart';
 import '../ui/dashboard_page.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 class VaultLoginPage extends StatefulWidget {
   const VaultLoginPage({super.key});
@@ -42,23 +41,12 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
   }
 
   Future<void> _checkStatusSilently() async {
-  final supabase = Supabase.instance.client;
-  final user = supabase.auth.currentUser;
-
-  if (user == null) return;
-
   try {
-    final response = await supabase
-        .from('profiles')
-        .select('vault_salt')
-        .eq('id', user.id)
-        .single();
-
-    final serverSalt = response['vault_salt'];
+    final hasVault = await _vaultService.isVaultSetup();
 
     if (mounted) {
       setState(() {
-        isSetup = serverSalt != null;
+        isSetup = hasVault;
 
         if (!isSetup) {
           title = "Create Vault PIN";

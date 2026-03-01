@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class VaultService {
@@ -10,23 +11,40 @@ class VaultService {
   SecretKey? _cachedSecretKey;
 
   final _aes = AesGcm.with256bits();
+  final _secureStorage = const FlutterSecureStorage();
 
   // ============================================================
-  // 🔍 CHECK IF USER HAS PIN (SERVER SIDE)
+  // 🔍 CHECK IF USER HAS PIN (WITH LOCAL CACHE)
   // ============================================================
   Future<bool> isVaultSetup() async {
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
+    // Check local cache first
+    final localSalt = await _secureStorage.read(key: 'vault_salt');
+    if (localSalt != null) return true;
 
-    if (user == null) return false;
+    // Try fetching from server
+    try {
+      final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
 
-    final response = await supabase
-        .from('profiles')
-        .select('vault_salt')
-        .eq('id', user.id)
-        .single();
+      if (user == null) return false;
 
-    return response['vault_salt'] != null;
+      final response = await supabase
+          .from('profiles')
+          .select('vault_salt')
+          .eq('id', user.id)
+          .single();
+
+      final salt = response['vault_salt'];
+      if (salt != null) {
+        // Cache salt locally for offline use
+        await _secureStorage.write(key: 'vault_salt', value: salt);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      // Offline — no local salt means vault not setup
+      return false;
+    }
   }
 
   // ============================================================
@@ -54,54 +72,73 @@ class VaultService {
       nonce: salt,
     );
 
-    // ✅ Save salt to Supabase (IMPORTANT)
+    final saltBase64 = base64Encode(salt);
+
+    // ✅ Save salt to Supabase
     await supabase
         .from('profiles')
-        .update({'vault_salt': base64Encode(salt)})
+        .update({'vault_salt': saltBase64})
         .eq('id', user.id);
+
+    // ✅ Cache salt locally for offline unlock
+    await _secureStorage.write(key: 'vault_salt', value: saltBase64);
 
     // Cache key in memory
     _cachedSecretKey = secretKey;
   }
 
   // ============================================================
-  // 🔓 UNLOCK VAULT (ENTER PIN)
+  // 🔓 UNLOCK VAULT (ENTER PIN — WORKS OFFLINE)
   // ============================================================
   Future<bool> unlockVault(String pin) async {
-    try {
-      final supabase = Supabase.instance.client;
-      final user = supabase.auth.currentUser;
+    String? saltBase64;
 
-      if (user == null) return false;
+    // 1️⃣ Try local cache first
+    saltBase64 = await _secureStorage.read(key: 'vault_salt');
 
-      final response = await supabase
-          .from('profiles')
-          .select('vault_salt')
-          .eq('id', user.id)
-          .single();
+    // 2️⃣ If not cached, try fetching from server
+    if (saltBase64 == null) {
+      try {
+        final supabase = Supabase.instance.client;
+        final user = supabase.auth.currentUser;
 
-      final saltBase64 = response['vault_salt'];
+        if (user == null) return false;
 
-      if (saltBase64 == null) return false;
+        final response = await supabase
+            .from('profiles')
+            .select('vault_salt')
+            .eq('id', user.id)
+            .single();
 
-      final salt = base64Decode(saltBase64);
+        saltBase64 = response['vault_salt'] as String?;
 
-      final pbkdf2 = Pbkdf2(
-        macAlgorithm: Hmac.sha256(),
-        iterations: 150000,
-        bits: 256,
-      );
-
-      final derivedKey = await pbkdf2.deriveKey(
-        secretKey: SecretKey(utf8.encode(pin)),
-        nonce: salt,
-      );
-
-      _cachedSecretKey = derivedKey;
-      return true;
-    } catch (e) {
-      return false;
+        if (saltBase64 != null) {
+          // Cache for next time
+          await _secureStorage.write(key: 'vault_salt', value: saltBase64);
+        }
+      } catch (_) {
+        // No internet & no local cache — can't unlock
+        return false;
+      }
     }
+
+    if (saltBase64 == null) return false;
+
+    final salt = base64Decode(saltBase64);
+
+    final pbkdf2 = Pbkdf2(
+      macAlgorithm: Hmac.sha256(),
+      iterations: 150000,
+      bits: 256,
+    );
+
+    final derivedKey = await pbkdf2.deriveKey(
+      secretKey: SecretKey(utf8.encode(pin)),
+      nonce: salt,
+    );
+
+    _cachedSecretKey = derivedKey;
+    return true;
   }
 
   // ============================================================
