@@ -407,16 +407,6 @@ class _ProfilePageState extends State<ProfilePage> {
                             ),
                             const SizedBox(width: 12),
                             _buildQuickAction(
-                              Icons.cloud_sync_outlined,
-                              "Backup",
-                              AppColors.purple,
-                              () async {
-                                await _navTo(const BackupSettingsPage());
-                                _checkBackupStatus();
-                              },
-                            ),
-                            const SizedBox(width: 12),
-                            _buildQuickAction(
                               Icons.lock_outline,
                               "Security",
                               AppColors.green,

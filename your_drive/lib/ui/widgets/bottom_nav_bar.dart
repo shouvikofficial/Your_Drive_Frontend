@@ -3,6 +3,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../services/upload_manager.dart';
+import '../../theme/app_colors.dart';
+import 'glass_card.dart';
 import 'upload_location_sheet.dart';
 import '../upload_page.dart';
 
@@ -249,18 +251,13 @@ class _AddOptionsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF1E1E2C) : Colors.white;
-    final textColor = isDark ? Colors.white : Colors.black87;
-    final subtitleColor = isDark ? Colors.grey[400]! : Colors.grey[600]!;
-
     return Container(
       decoration: BoxDecoration(
-        color: bgColor,
+        color: AppColors.bg,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.12),
+            color: Colors.black.withOpacity(0.08),
             blurRadius: 24,
             offset: const Offset(0, -4),
           ),
@@ -276,74 +273,59 @@ class _AddOptionsSheet extends StatelessWidget {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.grey[400],
+              color: Colors.grey[350],
               borderRadius: BorderRadius.circular(10),
             ),
           ),
 
           const SizedBox(height: 18),
 
-          // ── Title ──
+          // ── Title (matches dashboard header style) ──
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Row(
               children: [
-                Text(
+                const Text(
                   'Create new',
                   style: TextStyle(
                     fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: textColor,
-                    letterSpacing: -0.3,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
                   ),
                 ),
               ],
             ),
           ),
 
-          const SizedBox(height: 8),
+          const SizedBox(height: 20),
 
-          Divider(
-            color: Colors.grey.withOpacity(0.2),
-            thickness: 1,
-            indent: 24,
-            endIndent: 24,
-          ),
-
-          const SizedBox(height: 4),
-
-          // ── Options Grid ──
+          // ── Options Grid (dashboard CategoryCard style) ──
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
               children: [
                 // Row 1: Folder + Upload
                 Row(
                   children: [
                     Expanded(
-                      child: _OptionTile(
+                      child: _DashboardOptionCard(
                         icon: Icons.create_new_folder_rounded,
-                        iconColor: Colors.white,
-                        bgColor: const Color(0xFF4CAF50),
                         title: 'Folder',
-                        subtitle: 'New folder',
-                        textColor: textColor,
-                        subtitleColor: subtitleColor,
+                        subtitle: 'Create new',
+                        color: AppColors.green,
                         onTap: () {
                           Navigator.pop(context);
                           onCreateFolder();
                         },
                       ),
                     ),
+                    const SizedBox(width: 16),
                     Expanded(
-                      child: _OptionTile(
-                        icon: Icons.upload_file_rounded,
-                        iconColor: Colors.white,
-                        bgColor: const Color(0xFF4F8CFF),
+                      child: _DashboardOptionCard(
+                        icon: Icons.cloud_upload_rounded,
                         title: 'Upload',
                         subtitle: 'From device',
-                        textColor: textColor,
-                        subtitleColor: subtitleColor,
+                        color: AppColors.blue,
                         onTap: () {
                           Navigator.pop(context);
                           showUploadLocationPicker(context);
@@ -352,19 +334,17 @@ class _AddOptionsSheet extends StatelessWidget {
                     ),
                   ],
                 ),
+                const SizedBox(height: 16),
 
                 // Row 2: Camera Photo + Record Video
                 Row(
                   children: [
                     Expanded(
-                      child: _OptionTile(
+                      child: _DashboardOptionCard(
                         icon: Icons.camera_alt_rounded,
-                        iconColor: Colors.white,
-                        bgColor: const Color(0xFFFF9800),
                         title: 'Photo',
                         subtitle: 'Take a photo',
-                        textColor: textColor,
-                        subtitleColor: subtitleColor,
+                        color: AppColors.orange,
                         onTap: () => _captureAndUpload(
                           context,
                           ImageSource.camera,
@@ -372,15 +352,13 @@ class _AddOptionsSheet extends StatelessWidget {
                         ),
                       ),
                     ),
+                    const SizedBox(width: 16),
                     Expanded(
-                      child: _OptionTile(
+                      child: _DashboardOptionCard(
                         icon: Icons.videocam_rounded,
-                        iconColor: Colors.white,
-                        bgColor: const Color(0xFFE53935),
                         title: 'Video',
                         subtitle: 'Record video',
-                        textColor: textColor,
-                        subtitleColor: subtitleColor,
+                        color: AppColors.purple,
                         onTap: () {
                           Navigator.pop(context);
                           _recordVideo(context);
@@ -389,19 +367,17 @@ class _AddOptionsSheet extends StatelessWidget {
                     ),
                   ],
                 ),
+                const SizedBox(height: 16),
 
                 // Row 3: Scan Document
                 Row(
                   children: [
                     Expanded(
-                      child: _OptionTile(
+                      child: _DashboardOptionCard(
                         icon: Icons.document_scanner_rounded,
-                        iconColor: Colors.white,
-                        bgColor: const Color(0xFF7C4DFF),
                         title: 'Scan',
                         subtitle: 'Scan document',
-                        textColor: textColor,
-                        subtitleColor: subtitleColor,
+                        color: Colors.teal,
                         onTap: () => _captureAndUpload(
                           context,
                           ImageSource.camera,
@@ -409,6 +385,7 @@ class _AddOptionsSheet extends StatelessWidget {
                         ),
                       ),
                     ),
+                    const SizedBox(width: 16),
                     const Expanded(child: SizedBox()),
                   ],
                 ),
@@ -416,7 +393,7 @@ class _AddOptionsSheet extends StatelessWidget {
             ),
           ),
 
-          SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 20),
         ],
       ),
     );
@@ -459,26 +436,20 @@ class _AddOptionsSheet extends StatelessWidget {
 }
 
 // ============================================================
-// 🔷 Single Option Tile (Google Drive style)
+// 🔷 Dashboard-style Option Card (matches CategoryCard / GlassCard)
 // ============================================================
-class _OptionTile extends StatelessWidget {
+class _DashboardOptionCard extends StatelessWidget {
   final IconData icon;
-  final Color iconColor;
-  final Color bgColor;
   final String title;
   final String subtitle;
-  final Color textColor;
-  final Color subtitleColor;
+  final Color color;
   final VoidCallback onTap;
 
-  const _OptionTile({
+  const _DashboardOptionCard({
     required this.icon,
-    required this.iconColor,
-    required this.bgColor,
     required this.title,
     required this.subtitle,
-    required this.textColor,
-    required this.subtitleColor,
+    required this.color,
     required this.onTap,
   });
 
@@ -486,55 +457,36 @@ class _OptionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.all(6),
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 14),
-        decoration: BoxDecoration(
-          color: bgColor.withOpacity(0.07),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: bgColor.withOpacity(0.15),
-            width: 1,
-          ),
-        ),
+      child: GlassCard(
         child: Row(
           children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: bgColor,
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: [
-                  BoxShadow(
-                    color: bgColor.withOpacity(0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: Icon(icon, color: iconColor, size: 22),
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: color.withOpacity(0.2),
+              child: Icon(icon, color: color),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
                     title,
-                    style: TextStyle(
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
                       fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: textColor,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: subtitleColor,
-                      fontWeight: FontWeight.w400,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
                     ),
                   ),
                 ],
