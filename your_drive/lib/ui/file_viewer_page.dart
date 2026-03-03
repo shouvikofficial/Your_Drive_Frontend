@@ -110,6 +110,49 @@ class _FileViewerPageState extends State<FileViewerPage> {
     }
   }
 
+  // ── Download with feedback ────────────────────────────────────────────────
+  Future<void> _downloadFile(Map<String, dynamic> file) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(children: [
+          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+          const SizedBox(width: 12),
+          Expanded(child: Text("Downloading ${file['name']}...")),
+        ]),
+        duration: const Duration(days: 1),
+      ),
+    );
+    try {
+      final savePath = await DownloadService.downloadFile(
+        file['message_id'].toString(), file['name'],
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      final isGallery = savePath.startsWith("Gallery/");
+      final displayName = savePath.split(Platform.pathSeparator).last.split('/').last;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(children: [
+            Icon(isGallery ? Icons.photo_library_rounded : Icons.download_done_rounded, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(child: Text(isGallery ? "Saved to Gallery: $displayName" : "Saved to Downloads: $displayName")),
+          ]),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Download failed: ${e.toString().replaceAll('Exception: ', '')}"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   // ── Delete ────────────────────────────────────────────────────────────────
   Future<void> _deleteFile(Map<String, dynamic> file) async {
     final confirmed = await showDialog<bool>(
@@ -203,7 +246,7 @@ class _FileViewerPageState extends State<FileViewerPage> {
         onShare: () { Navigator.pop(context); _shareFile(file); },
         onDownload: () {
           Navigator.pop(context);
-          DownloadService.downloadFile(file['message_id'].toString(), file['name']);
+          _downloadFile(file);
         },
         onDelete: () { Navigator.pop(context); _deleteFile(file); },
       ),

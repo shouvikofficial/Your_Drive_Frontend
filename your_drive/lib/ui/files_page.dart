@@ -146,17 +146,40 @@ class _FilesPageState extends State<FilesPage> {
   }
 
   Future<void> _renameFile(Map<String, dynamic> file) async {
-    final controller = TextEditingController(text: file['name']);
-    final newName = await showDialog<String>(
+    final String fullName = file['name'] ?? '';
+
+    // Split into name + extension (like Google Drive)
+    final dotIndex = fullName.lastIndexOf('.');
+    final String nameOnly;
+    final String extension; // includes the dot, e.g. ".jpg"
+    if (dotIndex > 0) {
+      nameOnly = fullName.substring(0, dotIndex);
+      extension = fullName.substring(dotIndex);
+    } else {
+      nameOnly = fullName;
+      extension = '';
+    }
+
+    final controller = TextEditingController(text: nameOnly);
+    // Select all text so user can type immediately
+    controller.selection = TextSelection(baseOffset: 0, extentOffset: nameOnly.length);
+
+    final newBaseName = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Rename File'),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            border: const OutlineInputBorder(),
             labelText: 'File name',
+            // Show extension as a non-editable suffix
+            suffixText: extension.isNotEmpty ? extension : null,
+            suffixStyle: TextStyle(
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
           ),
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
@@ -173,7 +196,12 @@ class _FilesPageState extends State<FilesPage> {
       ),
     );
 
-    if (newName == null || newName.isEmpty || newName == file['name']) return;
+    if (newBaseName == null || newBaseName.isEmpty) return;
+
+    // Re-append original extension automatically
+    final newName = '$newBaseName$extension';
+
+    if (newName == fullName) return; // No change
 
     final resolvedName = _resolveUniqueName(newName, file['id'] as String);
 
@@ -249,19 +277,103 @@ class _FilesPageState extends State<FilesPage> {
   }
 
   Future<void> _bulkDownload() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Downloading ${selectedFiles.length} files..."))
-    );
-    for (var file in selectedFiles) {
-      await DownloadService.downloadFile(file['message_id'].toString(), file['name']);
-    }
+    final files = selectedFiles.toList();
     setState(() {
       selectedFiles.clear();
       isSelectionMode = false;
     });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(children: [
+          const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+          const SizedBox(width: 12),
+          Text("Downloading ${files.length} files..."),
+        ]),
+        duration: const Duration(days: 1),
+      ),
+    );
+
+    int success = 0;
+    int failed = 0;
+    for (var file in files) {
+      try {
+        await DownloadService.downloadFile(file['message_id'].toString(), file['name']);
+        success++;
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failed == 0
+            ? "$success files downloaded successfully"
+            : "$success downloaded, $failed failed"),
+        backgroundColor: failed == 0 ? Colors.green : Colors.orange,
+      ),
+    );
   }
 
   // --- Sharing & Decryption ---
+
+  /// Single file download with user feedback
+  Future<void> _downloadSingleFile(Map<String, dynamic> file) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(children: [
+          const SizedBox(
+            width: 18, height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Text("Downloading ${file['name']}...")),
+        ]),
+        duration: const Duration(days: 1),
+      ),
+    );
+
+    try {
+      final savePath = await DownloadService.downloadFile(
+        file['message_id'].toString(),
+        file['name'],
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      final isGallery = savePath.startsWith("Gallery/");
+      final displayName = savePath.split(Platform.pathSeparator).last.split('/').last;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(children: [
+            Icon(
+              isGallery ? Icons.photo_library_rounded : Icons.download_done_rounded,
+              color: Colors.white, size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(
+              isGallery ? "Saved to Gallery: $displayName" : "Saved to Downloads: $displayName",
+            )),
+          ]),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Download failed: ${e.toString().replaceAll('Exception: ', '')}"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
 
  Future<void> _shareFile(Map<String, dynamic> file) async {
   try {
@@ -734,7 +846,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
           ListTile(
             leading: const Icon(Icons.download_for_offline_outlined),
             title: const Text("Download"),
-            onTap: () { Navigator.pop(context); DownloadService.downloadFile(file['message_id'].toString(), file['name']); },
+            onTap: () { Navigator.pop(context); _downloadSingleFile(file); },
           ),
           ListTile(
             leading: const Icon(Icons.delete_outline, color: Colors.red),
