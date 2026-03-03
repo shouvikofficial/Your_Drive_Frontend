@@ -35,7 +35,8 @@ class _FilesPageState extends State<FilesPage> {
   List<Map<String, dynamic>> _files = [];
   bool _isLoading = true;
   bool isGridView = true;
-  
+  String? _loadError;
+
   final Set<Map<String, dynamic>> selectedFiles = {};
   bool isSelectionMode = false;
 
@@ -53,7 +54,7 @@ class _FilesPageState extends State<FilesPage> {
   }
 
   Future<void> _fetchFilesInitial() async {
-    setState(() => _isLoading = true);
+    setState(() { _isLoading = true; _loadError = null; });
     await _loadData();
     if (mounted) setState(() => _isLoading = false);
   }
@@ -80,6 +81,7 @@ class _FilesPageState extends State<FilesPage> {
       isSelectionMode = false;
     } catch (e) {
       debugPrint("Error loading files: $e");
+      _loadError = e.toString();
     }
   }
 
@@ -423,14 +425,16 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text("Upload", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
-      body: _isLoading 
-        ? const Center(child: CircularProgressIndicator(color: AppColors.blue))
-        : _files.isEmpty 
-          ? _buildEmptyState()
-          : RefreshIndicator(
-              onRefresh: _refreshFiles,
-              child: isGridView ? _buildGrid(_files) : _buildList(_files),
-            ),
+      body: _isLoading
+        ? (isGridView ? _buildGridSkeleton() : _buildListSkeleton())
+        : _loadError != null
+          ? _buildErrorState()
+          : _files.isEmpty
+            ? _buildEmptyState()
+            : RefreshIndicator(
+                onRefresh: _refreshFiles,
+                child: isGridView ? _buildGrid(_files) : _buildList(_files),
+              ),
     );
   }
 
@@ -488,6 +492,143 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
           const SizedBox(height: 16),
           Text("No files here", style: TextStyle(color: Colors.grey[500], fontSize: 18)),
         ],
+      ),
+    );
+  }
+
+  // ── Error state with retry ──
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cloud_off_rounded, size: 64, color: Colors.red[200]),
+            const SizedBox(height: 16),
+            const Text("Couldn't load files",
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black54)),
+            const SizedBox(height: 6),
+            Text("Check your connection and try again",
+                style: TextStyle(fontSize: 13, color: Colors.grey[400])),
+            const SizedBox(height: 24),
+            GestureDetector(
+              onTap: _fetchFilesInitial,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: const Text("Retry",
+                    style: TextStyle(
+                        color: AppColors.blue,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Google Drive-style Grid Skeleton ──
+  Widget _buildGridSkeleton() {
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: 0.9,
+      ),
+      itemCount: 6,
+      itemBuilder: (_, __) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Center(
+                  child: _ShimmerRect(width: 48, height: 48, radius: 12),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              child: Row(
+                children: [
+                  Expanded(child: _ShimmerRect(width: double.infinity, height: 14, radius: 6)),
+                  const SizedBox(width: 8),
+                  _ShimmerRect(width: 18, height: 18, radius: 9),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Google Drive-style List Skeleton ──
+  Widget _buildListSkeleton() {
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: 8,
+      itemBuilder: (_, __) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              // Thumbnail placeholder
+              _ShimmerRect(width: 52, height: 52, radius: 12),
+              const SizedBox(width: 14),
+              // Text placeholders
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ShimmerRect(width: 140, height: 13, radius: 6),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _ShimmerRect(width: 40, height: 10, radius: 4),
+                        const SizedBox(width: 8),
+                        _ShimmerRect(width: 50, height: 10, radius: 4),
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    _ShimmerRect(width: 110, height: 10, radius: 4),
+                  ],
+                ),
+              ),
+              // More icon placeholder
+              _ShimmerRect(width: 20, height: 20, radius: 10),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1134,6 +1275,58 @@ class _InfoRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Pulsing shimmer rectangle (Google Drive skeleton style) ──
+class _ShimmerRect extends StatefulWidget {
+  final double width, height, radius;
+  const _ShimmerRect({
+    required this.width,
+    required this.height,
+    this.radius = 6,
+  });
+
+  @override
+  State<_ShimmerRect> createState() => _ShimmerRectState();
+}
+
+class _ShimmerRectState extends State<_ShimmerRect>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
+    _opacity = Tween(begin: 0.06, end: 0.14).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _opacity,
+      builder: (_, __) => Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: BoxDecoration(
+          color: Colors.grey.withOpacity(_opacity.value),
+          borderRadius: BorderRadius.circular(widget.radius),
+        ),
       ),
     );
   }
