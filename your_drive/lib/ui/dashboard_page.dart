@@ -381,115 +381,138 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
 
       return Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          // ── Branded logo + title ──
+          Row(
             children: [
-              Text(
-                "Vault",
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                  fontWeight: FontWeight.w600,
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [AppColors.blue, AppColors.purple],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.blue.withOpacity(0.3),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.shield_rounded,
+                  color: Colors.white,
+                  size: 24,
                 ),
               ),
-              const SizedBox(height: 4),
-              const Text(
-                "Cloud Guard",
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w800,
-                ),
+              const SizedBox(width: 14),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Cloud Guard",
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                      height: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    "Encrypted cloud vault",
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: Colors.grey[500],
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
 
-          // Show uploading indicator
+          // ── Upload / Paused status pill ──
           if (isUploading)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const UploadPage(),
+            GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const UploadPage()),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: AppColors.blue.withOpacity(0.15),
+                    width: 1,
+                  ),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(AppColors.blue),
+                      ),
                     ),
-                  );
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: AppColors.blue.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation(AppColors.blue),
-                        ),
+                    SizedBox(width: 8),
+                    Text(
+                      "Uploading",
+                      style: TextStyle(
+                        color: AppColors.blue,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
                       ),
-                      SizedBox(width: 8),
-                      Text(
-                        "Uploading...",
-                        style: TextStyle(
-                          color: AppColors.blue,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             )
-          // Show paused indicator when not uploading but has paused items
           else if (hasPaused)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const UploadPage(),
+            GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const UploadPage()),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: Colors.orange.withOpacity(0.15),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.pause_circle_filled,
+                      size: 15,
+                      color: Colors.orange,
                     ),
-                  );
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.pause_circle_filled,
-                        size: 16,
+                    const SizedBox(width: 6),
+                    Text(
+                      "$pausedCount Paused",
+                      style: const TextStyle(
                         color: Colors.orange,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        "$pausedCount Paused",
-                        style: const TextStyle(
-                          color: Colors.orange,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
