@@ -25,7 +25,7 @@ dependencies:
   url_launcher: ^6.3.2
   video_player: ^2.10.1
   chewie: ^1.13.0
-  video_player_win: ^3.2.2
+  # video_player_win: ^3.2.2
 
   # 🔹 Supabase
   supabase_flutter: ^2.12.0
@@ -48,19 +48,20 @@ dependencies:
   timeago: ^3.6.1
   flutter_foreground_task: ^8.1.0
   crypto: ^3.0.3
-  encrypt: ^5.0.3
+  # encrypt: ^5.0.3
   share_plus: ^7.0.0
   flutter_secure_storage: ^9.0.0
   pin_code_fields: ^8.0.1
   cryptography: ^2.7.0
   flutter_pdfview: ^1.3.2
   open_filex: ^4.3.4
-  flutter_local_notifications: ^17.0.0
-  flutter_background_service: ^5.0.0
+  # flutter_local_notifications: ^17.0.0
+  # flutter_background_service: ^5.0.0
   hive: ^2.2.3
   hive_flutter: ^1.1.0
+  # hive_flutter: ^1.1.0
   rename: ^3.1.0
-  flutter_launcher_icons: ^0.14.4
+  # flutter_launcher_icons: ^0.14.4
   flutter_image_compress: ^2.3.0  # For images
   video_thumbnail: ^0.5.3
   image_picker: ^1.1.2            # Camera photo & video capture
