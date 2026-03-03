@@ -200,25 +200,37 @@ class _ProfilePageState extends State<ProfilePage> {
                         ),
                         const SizedBox(height: 20),
 
-                        // Avatar
+                        // Avatar with gradient ring and fallback icon
                         Container(
                           padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            border: Border.all(
-                                color: Colors.white.withOpacity(0.4), width: 2),
+                            gradient: const LinearGradient(
+                              colors: [AppColors.blue, AppColors.purple],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.blue.withOpacity(0.18),
+                                blurRadius: 18,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
                           ),
                           child: CircleAvatar(
-                            radius: 46,
-                            backgroundColor: Colors.white.withOpacity(0.15),
-                            child: Text(
-                              name.isNotEmpty ? name[0].toUpperCase() : "U",
-                              style: const TextStyle(
-                                fontSize: 38,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
+                            radius: 44,
+                            backgroundColor: Colors.white.withOpacity(0.10),
+                            child: name.isNotEmpty && name.trim() != ''
+                                ? Text(
+                                    name[0].toUpperCase(),
+                                    style: const TextStyle(
+                                      fontSize: 38,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(Icons.person_rounded, size: 44, color: Colors.white70),
                           ),
                         ),
                         const SizedBox(height: 14),
@@ -399,15 +411,14 @@ class _ProfilePageState extends State<ProfilePage> {
                         Row(
                           children: [
                             _buildQuickAction(
-                              Icons.person_outline,
+                              Icons.person_outline_rounded,
                               "Account",
                               AppColors.blue,
-                              () => _navTo(const AccountSettingsPage(),
-                                  refreshProfile: true),
+                              () => _navTo(const AccountSettingsPage(), refreshProfile: true),
                             ),
                             const SizedBox(width: 12),
                             _buildQuickAction(
-                              Icons.lock_outline,
+                              Icons.lock_outline_rounded,
                               "Security",
                               AppColors.green,
                               () => _navTo(const PrivacyPage()),
@@ -418,16 +429,22 @@ class _ProfilePageState extends State<ProfilePage> {
                         const SizedBox(height: 28),
 
                         // ── SETTINGS SECTION ──
-                        const Padding(
-                          padding: EdgeInsets.only(left: 4, bottom: 12),
-                          child: Text(
-                            "SETTINGS",
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey,
-                              letterSpacing: 1.0,
-                            ),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 4, bottom: 12),
+                          child: Row(
+                            children: [
+                              Icon(Icons.settings, size: 16, color: Colors.grey[500]),
+                              const SizedBox(width: 6),
+                              const Text(
+                                "SETTINGS",
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.grey,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
 
@@ -513,24 +530,24 @@ class _ProfilePageState extends State<ProfilePage> {
                           child: ElevatedButton(
                             onPressed: logout,
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red.withOpacity(0.08),
+                              backgroundColor: Colors.red.withOpacity(0.10),
                               foregroundColor: Colors.red,
                               elevation: 0,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(18),
                                 side: BorderSide(
-                                    color: Colors.red.withOpacity(0.15)),
+                                    color: Colors.red.withOpacity(0.18)),
                               ),
                             ),
                             child: const Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(Icons.logout_rounded, size: 20),
+                                Icon(Icons.logout_rounded, size: 22),
                                 SizedBox(width: 10),
                                 Text(
                                   "Log Out",
                                   style: TextStyle(
-                                    fontSize: 16,
+                                    fontSize: 16.5,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
