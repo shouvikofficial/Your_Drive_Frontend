@@ -572,33 +572,52 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
                 ],
               ),
               const SizedBox(height: 24),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: LinearProgressIndicator(
-                  value: progress > 0 ? progress : null,
-                  backgroundColor: Colors.white12,
-                  color: Colors.white,
-                  minHeight: 8,
+              if (progress > 0) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    backgroundColor: Colors.white12,
+                    color: Colors.white,
+                    minHeight: 8,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
+                const SizedBox(height: 12),
+              ],
               ValueListenableBuilder<String>(
                 valueListenable: backupService.statusNotifier,
-                builder: (_, status, __) => Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(status == "Idle" ? "Everything up to date" : status,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500)),
-                    if (progress > 0)
-                      Text("${(progress * 100).toInt()}%",
-                          style: const TextStyle(
+                builder: (_, status, __) {
+                  final isIdle = status == "Idle" || progress <= 0;
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isIdle)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 6),
+                              child: Icon(Icons.check_circle_rounded,
+                                  color: Colors.white70, size: 16),
+                            ),
+                          Text(
+                            isIdle ? "Everything up to date" : status,
+                            style: const TextStyle(
                               color: Colors.white,
-                              fontWeight: FontWeight.bold)),
-                  ],
-                ),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (progress > 0)
+                        Text("${(progress * 100).toInt()}%",
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold)),
+                    ],
+                  );
+                },
               ),
             ],
           ),
