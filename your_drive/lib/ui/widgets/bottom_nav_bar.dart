@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../services/upload_manager.dart';
@@ -45,10 +44,12 @@ class BottomNavBar extends StatelessWidget {
   }
 
   // ============================================================
-  // 🔹 NAV ICON BUILDER
+  // 🔹 NAV ITEM BUILDER
   // ============================================================
-  Widget _navIcon({
+  Widget _navItem({
     required IconData icon,
+    required IconData activeIcon,
+    required String label,
     required VoidCallback onTap,
     required bool active,
     Widget? badge,
@@ -56,24 +57,44 @@ class BottomNavBar extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: active ? Colors.blue.withOpacity(0.12) : Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
+      child: SizedBox(
+        width: 56,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: active ? AppColors.blue.withOpacity(0.1) : Colors.transparent,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Icon(
+                    active ? activeIcon : icon,
+                    size: 22,
+                    color: active ? AppColors.blue : Colors.grey[500],
+                  ),
+                ),
+                if (badge != null) badge,
+              ],
             ),
-            child: Icon(
-              icon,
-              size: 24,
-              color: active ? Colors.blue : Colors.black87,
+            const SizedBox(height: 3),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                color: active ? AppColors.blue : Colors.grey[500],
+                letterSpacing: 0.1,
+              ),
             ),
-          ),
-          if (badge != null) badge,
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -83,108 +104,118 @@ class BottomNavBar extends StatelessWidget {
   // ============================================================
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(32),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+    final bottomPad = MediaQuery.of(context).padding.bottom;
+
+    return Container(
+      margin: EdgeInsets.fromLTRB(16, 0, 16, bottomPad > 0 ? bottomPad : 12),
+      height: 70,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 24,
+            offset: const Offset(0, -4),
+          ),
+          BoxShadow(
+            color: AppColors.blue.withOpacity(0.04),
+            blurRadius: 40,
+            offset: const Offset(0, -8),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _navItem(
+            icon: Icons.home_outlined,
+            activeIcon: Icons.home_rounded,
+            label: 'Home',
+            onTap: onHome,
+            active: selectedIndex == 0,
+          ),
+          _navItem(
+            icon: Icons.folder_outlined,
+            activeIcon: Icons.folder_rounded,
+            label: 'Files',
+            onTap: onFiles,
+            active: selectedIndex == 1,
+          ),
+
+          // ================= FAB =================
+          GestureDetector(
+            onTap: () => _showAddOptions(context),
             child: Container(
-              height: 72,
+              width: 50,
+              height: 50,
               decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.white.withOpacity(0.65),
-                    Colors.white.withOpacity(0.35),
-                  ],
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  colors: [AppColors.blue, AppColors.purple],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-                borderRadius: BorderRadius.circular(32),
-                border: Border.all(color: Colors.white.withOpacity(0.4)),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  )
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _navIcon(
-                    icon: Icons.home_rounded,
-                    onTap: onHome,
-                    active: selectedIndex == 0,
-                  ),
-                  _navIcon(
-                    icon: Icons.folder_rounded,
-                    onTap: onFiles,
-                    active: selectedIndex == 1,
-                  ),
-
-                  // ================= FAB =================
-                  GestureDetector(
-                    onTap: () => _showAddOptions(context),
-                    child: Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF4F8CFF), Color(0xFF6A5BFF)],
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF4F8CFF).withOpacity(0.4),
-                            blurRadius: 20,
-                            offset: const Offset(0, 8),
-                          )
-                        ],
-                      ),
-                      child: const Icon(Icons.add, color: Colors.white, size: 30),
-                    ),
-                  ),
-
-                  // ================= NOTIFICATION =================
-                  _navIcon(
-                    icon: Icons.notifications_rounded,
-                    onTap: onNotifications,
-                    active: selectedIndex == 2,
-                    badge: unreadCount > 0
-                        ? Positioned(
-                            right: 6,
-                            top: 6,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.red,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.white, width: 1.5),
-                              ),
-                              child: Text(
-                                unreadCount > 9 ? '9+' : unreadCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          )
-                        : null,
-                  ),
-
-                  _navIcon(
-                    icon: Icons.person_rounded,
-                    onTap: onProfile,
-                    active: selectedIndex == 3,
+                    color: AppColors.blue.withOpacity(0.35),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
                   ),
                 ],
               ),
+              child: const Icon(Icons.add_rounded, color: Colors.white, size: 28),
             ),
           ),
-        ),
+
+          // ================= NOTIFICATION =================
+          _navItem(
+            icon: Icons.notifications_outlined,
+            activeIcon: Icons.notifications_rounded,
+            label: 'Alerts',
+            onTap: onNotifications,
+            active: selectedIndex == 2,
+            badge: unreadCount > 0
+                ? Positioned(
+                    right: 2,
+                    top: -2,
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF3B30),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFFF3B30).withOpacity(0.3),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        unreadCount > 9 ? '9+' : unreadCount.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                  )
+                : null,
+          ),
+
+          _navItem(
+            icon: Icons.person_outline_rounded,
+            activeIcon: Icons.person_rounded,
+            label: 'Profile',
+            onTap: onProfile,
+            active: selectedIndex == 3,
+          ),
+        ],
       ),
     );
   }
