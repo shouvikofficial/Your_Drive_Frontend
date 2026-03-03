@@ -16,24 +16,61 @@ class CreateFolderPage extends StatefulWidget {
 }
 
 class _CreateFolderPageState extends State<CreateFolderPage> {
+
   final TextEditingController nameController = TextEditingController();
   bool creating = false;
+  List<String> existingNames = [];
+  @override
+  void initState() {
+    super.initState();
+    _fetchExistingNamesAndSuggest();
+  }
+
+  Future<void> _fetchExistingNamesAndSuggest() async {
+    final supabase = Supabase.instance.client;
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+    var query = supabase
+        .from('folders')
+        .select('name')
+        .eq('user_id', user.id);
+    if (widget.currentFolderId != null) {
+      query = query.eq('folder_id', widget.currentFolderId!);
+    } else {
+      query = query.isFilter('folder_id', null);
+    }
+    final res = await query;
+    final names = <String>[];
+    for (final f in res) {
+      if (f['name'] is String) names.add(f['name'].toLowerCase());
+    }
+    setState(() {
+      existingNames = names;
+      nameController.text = _suggestFolderName();
+    });
+  }
+
+  String _suggestFolderName() {
+    String base = "New Folder";
+    if (!existingNames.contains(base.toLowerCase())) return base;
+    int i = 1;
+    while (existingNames.contains((base + ' $i').toLowerCase())) {
+      i++;
+    }
+    return "$base $i";
+  }
 
   /// 📁 CREATE FOLDER LOGIC
   Future<void> createFolder() async {
-    final rawName = nameController.text.trim();
 
+    final rawName = nameController.text.trim();
     if (rawName.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Folder name required"), backgroundColor: Colors.red),
       );
       return;
     }
-
-    // ✅ FORCE CAPITALIZATION (First Letter Upper, rest as typed)
-    final name = rawName.length > 1
-        ? rawName[0].toUpperCase() + rawName.substring(1)
-        : rawName.toUpperCase();
+    final name = rawName;
 
     setState(() => creating = true);
 
@@ -108,12 +145,48 @@ class _CreateFolderPageState extends State<CreateFolderPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: const BackButton(color: Colors.black),
-        title: const Text("New Folder", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-        centerTitle: true,
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(60),
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [AppColors.blue, AppColors.purple],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black12,
+                blurRadius: 12,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                  onPressed: () => Navigator.pop(context),
+                ),
+                const Expanded(
+                  child: Text(
+                    "New Folder",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 22,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 48),
+              ],
+            ),
+          ),
+        ),
       ),
       body: Center(
         child: SingleChildScrollView(
@@ -127,13 +200,13 @@ class _CreateFolderPageState extends State<CreateFolderPage> {
                 child: Container(
                   padding: const EdgeInsets.all(32),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.85),
+                    color: Colors.white.withOpacity(0.92),
                     borderRadius: BorderRadius.circular(28),
                     border: Border.all(color: Colors.white.withOpacity(0.6), width: 1.5),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 20,
+                        color: Colors.black.withOpacity(0.07),
+                        blurRadius: 24,
                         offset: const Offset(0, 10),
                       ),
                     ],
@@ -146,37 +219,41 @@ class _CreateFolderPageState extends State<CreateFolderPage> {
                         height: 80,
                         width: 80,
                         decoration: BoxDecoration(
-                          color: AppColors.blue.withOpacity(0.1),
+                          gradient: const LinearGradient(
+                            colors: [AppColors.blue, AppColors.purple],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
                           shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.blue.withOpacity(0.13),
+                              blurRadius: 16,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
                         ),
-                        child: const Icon(Icons.create_new_folder_rounded, size: 40, color: AppColors.blue),
+                        child: const Icon(Icons.create_new_folder_rounded, size: 40, color: Colors.white),
                       ),
-                      
                       const SizedBox(height: 24),
-
                       const Text(
                         "Create New Folder",
                         style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black87),
                       ),
-                      
                       const SizedBox(height: 8),
-                      
                       Text(
-                        widget.currentFolderId == null 
+                        widget.currentFolderId == null
                             ? "This will be added to your My Drive"
                             : "This will be added to the current folder",
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.grey, fontSize: 14),
                       ),
-
                       const SizedBox(height: 32),
-
-                      /// ✏️ INPUT FIELD
+                      // ✏️ INPUT FIELD
                       TextField(
                         controller: nameController,
                         autofocus: true,
-                        // ✅ KEY CHANGE: Defaults keyboard to Uppercase
-                        textCapitalization: TextCapitalization.sentences, 
+                        textCapitalization: TextCapitalization.sentences,
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                         decoration: InputDecoration(
                           hintText: "Folder Name",
@@ -193,10 +270,8 @@ class _CreateFolderPageState extends State<CreateFolderPage> {
                           ),
                         ),
                       ),
-
                       const SizedBox(height: 32),
-
-                      /// ✅ ACTION BUTTONS
+                      // ✅ ACTION BUTTONS
                       Row(
                         children: [
                           Expanded(
