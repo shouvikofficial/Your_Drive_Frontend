@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:your_drive/ui/profile_page.dart';
 import '../theme/app_colors.dart';
 import '../services/backup_service.dart';
 import '../services/file_service.dart';
-import '../services/upload_manager.dart'; // ✅ Import UploadManager
+import '../services/upload_manager.dart';
 import 'widgets/category_card.dart';
 import 'widgets/folder_card.dart';
 import 'widgets/bottom_nav_bar.dart';
 import 'files_page.dart';
 import 'create_folder_page.dart';
 import 'notification_list_page.dart';
-import 'upload_page.dart'; // ✅ Import UploadPage for navigation
+import 'upload_page.dart';
 import 'search_page.dart';
+import 'settings_pages.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -34,10 +36,32 @@ class _DashboardPageState extends State<DashboardPage> {
   int musicCount = 0;
   int docCount = 0;
 
+  // ── Backup status ──
+  bool _isBackupEnabled = false;
+
   @override
   void initState() {
     super.initState();
     _refreshAllData();
+    _checkBackupStatus();
+  }
+
+  Future<void> _checkBackupStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _isBackupEnabled = prefs.getBool('backup_enabled') ?? false;
+      });
+    }
+  }
+
+  Future<void> _enableBackup() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('backup_enabled', true);
+    if (mounted) {
+      setState(() => _isBackupEnabled = true);
+    }
+    backupService.startAutoBackup();
   }
 
   
@@ -128,6 +152,7 @@ class _DashboardPageState extends State<DashboardPage> {
       });
     }
     await Future.wait([_loadFolders(), _fetchFileCounts()]);
+    _checkBackupStatus();
   }
 
   Future _deleteFolder(String folderId) async {
@@ -556,6 +581,109 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
   }
 
   Widget _buildBackupCard() {
+    // ── BACKUP OFF STATE ──
+    if (!_isBackupEnabled) {
+      return Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.grey.shade200),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                // Cloud-off icon with orange accent
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(Icons.cloud_off_rounded,
+                      color: Colors.orange.shade700, size: 28),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("Backup is off",
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87)),
+                      const SizedBox(height: 4),
+                      Text(
+                        "Your photos & videos are not being backed up",
+                        style: TextStyle(
+                            fontSize: 12.5,
+                            color: Colors.grey.shade600,
+                            height: 1.3),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const BackupSettingsPage()),
+                      );
+                      _checkBackupStatus();
+                    },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey.shade700,
+                      side: BorderSide(color: Colors.grey.shade300),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                    child: const Text("Settings",
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton.icon(
+                    onPressed: _enableBackup,
+                    icon: const Icon(Icons.cloud_upload_rounded, size: 20),
+                    label: const Text("Turn on backup",
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.blue,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    // ── BACKUP ON STATE ──
     return ValueListenableBuilder<double>(
       valueListenable: backupService.progressNotifier,
       builder: (context, progress, _) {
