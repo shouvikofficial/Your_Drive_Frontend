@@ -21,13 +21,19 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  late Future<List<Map<String, dynamic>>> foldersFuture;
   final backupService = BackupService();
+
+  // ── Folder state (replaces FutureBuilder) ──
+  List<Map<String, dynamic>> folders = [];
+  bool isLoadingFolders = true;
+  String? folderError;
+
+  // ── Category counts ──
   int photoCount = 0;
   int videoCount = 0;
   int musicCount = 0;
   int docCount = 0;
-  
+
   @override
   void initState() {
     super.initState();
@@ -39,65 +45,89 @@ class _DashboardPageState extends State<DashboardPage> {
 // ============================================================
 // DATA LOGIC
 // ============================================================
-  Future<List<Map<String, dynamic>>> fetchFolders() async {
-    final supabase = Supabase.instance.client;
-    final user = supabase.auth.currentUser;
+  Future<void> _loadFolders() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final user = supabase.auth.currentUser;
 
-    if (user == null) return [];
+      if (user == null) {
+        if (mounted) setState(() { folders = []; isLoadingFolders = false; });
+        return;
+      }
 
-    final res = await supabase
-        .from('folders')
-        .select()
-        .eq('user_id', user.id)
-        .order('created_at', ascending: false);
+      final res = await supabase
+          .from('folders')
+          .select()
+          .eq('user_id', user.id)
+          .order('created_at', ascending: false);
 
-    return List<Map<String, dynamic>>.from(res);
+      if (!mounted) return;
+      setState(() {
+        folders = List<Map<String, dynamic>>.from(res);
+        isLoadingFolders = false;
+        folderError = null;
+      });
+    } catch (e) {
+      debugPrint("FOLDER LOAD ERROR: $e");
+      if (!mounted) return;
+      setState(() {
+        isLoadingFolders = false;
+        folderError = e.toString();
+      });
+    }
   }
 
-  Future _fetchFileCounts() async {
+  Future<void> _fetchFileCounts() async {
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
 
     if (user == null) return;
 
-    final results = await Future.wait([
-      supabase
-          .from('files')
-          .count(CountOption.exact)
-          .eq('user_id', user.id)
-          .eq('type', 'image'),
-      supabase
-          .from('files')
-          .count(CountOption.exact)
-          .eq('user_id', user.id)
-          .eq('type', 'video'),
-      supabase
-          .from('files')
-          .count(CountOption.exact)
-          .eq('user_id', user.id)
-          .eq('type', 'music'),
-      supabase
-          .from('files')
-          .count(CountOption.exact)
-          .eq('user_id', user.id)
-          .eq('type', 'document'),
-    ]);
+    try {
+      final results = await Future.wait([
+        supabase
+            .from('files')
+            .count(CountOption.exact)
+            .eq('user_id', user.id)
+            .eq('type', 'image'),
+        supabase
+            .from('files')
+            .count(CountOption.exact)
+            .eq('user_id', user.id)
+            .eq('type', 'video'),
+        supabase
+            .from('files')
+            .count(CountOption.exact)
+            .eq('user_id', user.id)
+            .eq('type', 'music'),
+        supabase
+            .from('files')
+            .count(CountOption.exact)
+            .eq('user_id', user.id)
+            .eq('type', 'document'),
+      ]);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      photoCount = results[0];
-      videoCount = results[1];
-      musicCount = results[2];
-      docCount = results[3];
-    });
+      setState(() {
+        photoCount = results[0];
+        videoCount = results[1];
+        musicCount = results[2];
+        docCount = results[3];
+      });
+    } catch (e) {
+      debugPrint("FILE COUNT ERROR: $e");
+    }
   }
 
-  void _refreshAllData() {
-    setState(() {
-      foldersFuture = fetchFolders();
-    });
-    _fetchFileCounts();
+  Future<void> _refreshAllData() async {
+    if (mounted) {
+      setState(() {
+        isLoadingFolders = true;
+        folderError = null;
+      });
+    }
+    await Future.wait([_loadFolders(), _fetchFileCounts()]);
   }
 
   Future _deleteFolder(String folderId) async {
@@ -254,7 +284,10 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1200),
-            child: ListView(
+            child: RefreshIndicator(
+              onRefresh: _refreshAllData,
+              color: AppColors.blue,
+              child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               children: [
                 _buildHeader(),
@@ -283,6 +316,7 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
                 _buildFolderGrid(crossAxisCount),
                 const SizedBox(height: 120), // Bottom padding for nav bar
               ],
+            ),
             ),
           ),
         ),
@@ -627,67 +661,189 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
   }
 
   Widget _buildFolderGrid(int crossAxisCount) {
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: foldersFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+    // ── Loading: Google Drive shimmer skeleton ──
+    if (isLoadingFolders) {
+      return GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: 4, // show 4 shimmer placeholders
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: crossAxisCount,
+          crossAxisSpacing: 16,
+          mainAxisSpacing: 16,
+          childAspectRatio: 1.0,
+        ),
+        itemBuilder: (context, index) => _buildShimmerCard(),
+      );
+    }
 
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(40),
-            decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: Colors.grey[200]!)),
-            child: Column(
-              children: [
-                Icon(Icons.create_new_folder_outlined,
-                    color: Colors.grey[300], size: 48),
-                const SizedBox(height: 12),
-                const Text("No folders created yet",
-                    style: TextStyle(color: Colors.black38)),
-              ],
+    // ── Error: retry prompt ──
+    if (folderError != null) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(40),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.red.withOpacity(0.2)),
+        ),
+        child: Column(
+          children: [
+            Icon(Icons.cloud_off_rounded, color: Colors.red[300], size: 48),
+            const SizedBox(height: 12),
+            const Text("Couldn't load folders",
+                style: TextStyle(
+                    color: Colors.black54, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Text("Tap to retry",
+                style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+            const SizedBox(height: 16),
+            GestureDetector(
+              onTap: _refreshAllData,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppColors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text("Retry",
+                    style: TextStyle(
+                        color: AppColors.blue, fontWeight: FontWeight.w700)),
+              ),
             ),
-          );
-        }
+          ],
+        ),
+      );
+    }
 
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: snapshot.data!.length,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
-            childAspectRatio: 1.0,
-          ),
-          itemBuilder: (context, index) {
-            final folder = snapshot.data![index];
+    // ── Empty state ──
+    if (folders.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(40),
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.grey[200]!)),
+        child: Column(
+          children: [
+            Icon(Icons.create_new_folder_outlined,
+                color: Colors.grey[300], size: 48),
+            const SizedBox(height: 12),
+            const Text("No folders created yet",
+                style: TextStyle(color: Colors.black38)),
+          ],
+        ),
+      );
+    }
 
-            return FolderCard(
-              icon: Icons.folder_rounded,
-              title: folder['name'],
-              info: "Items inside",
-              color: AppColors.blue,
-              onTap: () =>
-                  _navToPage(FilesPage(type: 'all', folderId: folder['id'])),
-              
-              // ✅ Updated Bottom Sheet Actions
-              onDelete: () => _showDeleteDialog(folder),
-              onRename: () => _showRenameDialog(folder), // This now correctly triggers the popup!
-              onShare: () {
-                debugPrint("Share ${folder['name']}");
-              },
-              onStar: () {
-                debugPrint("Star ${folder['name']}");
-              },
-            );
+    // ── Folder grid ──
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: folders.length,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: crossAxisCount,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: 1.0,
+      ),
+      itemBuilder: (context, index) {
+        final folder = folders[index];
+
+        return FolderCard(
+          icon: Icons.folder_rounded,
+          title: folder['name'],
+          info: "Items inside",
+          color: AppColors.blue,
+          onTap: () =>
+              _navToPage(FilesPage(type: 'all', folderId: folder['id'])),
+          onDelete: () => _showDeleteDialog(folder),
+          onRename: () => _showRenameDialog(folder),
+          onShare: () {
+            debugPrint("Share ${folder['name']}");
+          },
+          onStar: () {
+            debugPrint("Star ${folder['name']}");
           },
         );
       },
+    );
+  }
+
+  /// Google Drive-style shimmer placeholder card
+  Widget _buildShimmerCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey[100]!),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _shimmerBox(36, 36, radius: 10),
+          const Spacer(),
+          _shimmerBox(14, 90),
+          const SizedBox(height: 6),
+          _shimmerBox(11, 60),
+        ],
+      ),
+    );
+  }
+
+  Widget _shimmerBox(double height, double width, {double radius = 6}) {
+    return _ShimmerBox(height: height, width: width, radius: radius);
+  }
+}
+
+/// Pulsing shimmer box (repeating animation without a controller)
+class _ShimmerBox extends StatefulWidget {
+  final double height, width, radius;
+  const _ShimmerBox(
+      {required this.height, required this.width, this.radius = 6});
+
+  @override
+  State<_ShimmerBox> createState() => _ShimmerBoxState();
+}
+
+class _ShimmerBoxState extends State<_ShimmerBox>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
+    _anim = Tween(begin: 0.06, end: 0.18).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, __) => Container(
+        height: widget.height,
+        width: widget.width,
+        decoration: BoxDecoration(
+          color: Colors.grey.withOpacity(_anim.value),
+          borderRadius: BorderRadius.circular(widget.radius),
+        ),
+      ),
     );
   }
 }
