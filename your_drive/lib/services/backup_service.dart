@@ -682,8 +682,15 @@ class BackupService {
     } catch (e, stack) {
       debugPrint("[Backup] Error: $e");
       debugPrint("[Backup] Stack: $stack");
-      statusNotifier.value = "Error: $e";
-      phaseNotifier.value = BackupPhase.error;
+      final errStr = e.toString().toLowerCase();
+      if (errStr.contains('socket') || errStr.contains('host lookup') ||
+          errStr.contains('connection') || errStr.contains('network')) {
+        statusNotifier.value = "Waiting for internet…";
+        phaseNotifier.value = BackupPhase.waitingWifi;
+      } else {
+        statusNotifier.value = "Error: $e";
+        phaseNotifier.value = BackupPhase.error;
+      }
     } finally {
       _isBackingUp = false;
     }
@@ -999,14 +1006,22 @@ class BackupService {
       return false;
     }
 
+    // No internet at all?
+    final connectivity = await Connectivity().checkConnectivity();
+    final hasAnyConnection = connectivity.any((r) => r != ConnectivityResult.none);
+    if (!hasAnyConnection) {
+      statusNotifier.value = "Waiting for internet…";
+      phaseNotifier.value = BackupPhase.waitingWifi;
+      return false;
+    }
+
     // Wi-Fi check
     final wifiOnly = prefs.getBool('wifi_only') ?? true;
     if (wifiOnly) {
-      final result = await Connectivity().checkConnectivity();
-      final hasWifi = result.contains(ConnectivityResult.wifi) ||
-          result.contains(ConnectivityResult.ethernet);
+      final hasWifi = connectivity.contains(ConnectivityResult.wifi) ||
+          connectivity.contains(ConnectivityResult.ethernet);
       if (!hasWifi) {
-        statusNotifier.value = "Waiting for Wi-Fi...";
+        statusNotifier.value = "Waiting for Wi-Fi…";
         phaseNotifier.value = BackupPhase.waitingWifi;
         return false;
       }
