@@ -15,6 +15,7 @@ class _OfflineBannerState extends State<OfflineBanner>
     with SingleTickerProviderStateMixin {
   late StreamSubscription<List<ConnectivityResult>> _subscription;
   bool _isOffline = false;
+  bool _isDismissed = false;
 
   late AnimationController _controller;
   late Animation<Offset> _offsetAnimation;
@@ -50,13 +51,19 @@ class _OfflineBannerState extends State<OfflineBanner>
 
   void _updateConnectionStatus(List<ConnectivityResult> results) {
     bool offline = results.every((r) => r == ConnectivityResult.none);
-    
+
     if (offline != _isOffline) {
       if (mounted) {
         setState(() {
           _isOffline = offline;
+          // When connection status changes (e.g., from online to offline),
+          // we reset the dismissed state so the banner shows again.
+          if (_isOffline) {
+            _isDismissed = false;
+          }
         });
-        if (_isOffline) {
+
+        if (_isOffline && !_isDismissed) {
           _controller.forward();
         } else {
           _controller.reverse();
@@ -77,7 +84,7 @@ class _OfflineBannerState extends State<OfflineBanner>
     return Stack(
       children: [
         widget.child,
-        
+
         // The overlay banner
         Positioned(
           top: 0,
@@ -92,22 +99,39 @@ class _OfflineBannerState extends State<OfflineBanner>
                 child: Container(
                   width: double.infinity,
                   color: Colors.redAccent,
-                  padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-                  child: const Row(
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 8.0, horizontal: 16.0),
+                  child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
+                      const Icon(
                         Icons.cloud_off,
                         color: Colors.white,
                         size: 16,
                       ),
-                      SizedBox(width: 8),
-                      Text(
-                        'No internet connection',
-                        style: TextStyle(
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'No internet connection',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _isDismissed = true;
+                          });
+                          _controller.reverse();
+                        },
+                        child: const Icon(
+                          Icons.close,
                           color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
+                          size: 18,
                         ),
                       ),
                     ],
