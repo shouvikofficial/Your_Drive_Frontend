@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:your_drive/ui/profile_page.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../theme/app_colors.dart';
 import '../services/backup_service.dart';
 import '../services/file_service.dart';
@@ -64,8 +65,6 @@ class _DashboardPageState extends State<DashboardPage> {
     backupService.startAutoBackup();
   }
 
-  
-
 // ============================================================
 // DATA LOGIC
 // ============================================================
@@ -75,7 +74,11 @@ class _DashboardPageState extends State<DashboardPage> {
       final user = supabase.auth.currentUser;
 
       if (user == null) {
-        if (mounted) setState(() { folders = []; isLoadingFolders = false; });
+        if (mounted)
+          setState(() {
+            folders = [];
+            isLoadingFolders = false;
+          });
         return;
       }
 
@@ -213,7 +216,7 @@ class _DashboardPageState extends State<DashboardPage> {
   // ============================================================
   // NEW RENAME LOGIC
   // ============================================================
-Future<void> _renameFolder(dynamic folderId, String newName) async {
+  Future<void> _renameFolder(dynamic folderId, String newName) async {
     if (newName.trim().isEmpty) return; // Don't allow empty names
 
     try {
@@ -227,11 +230,11 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
       // If response is empty, it means 0 rows were updated (Blocked by RLS!)
       if (response.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text("Rename failed: Blocked by database permissions (RLS)"),
-                backgroundColor: Colors.redAccent,
-              ));
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content:
+                Text("Rename failed: Blocked by database permissions (RLS)"),
+            backgroundColor: Colors.redAccent,
+          ));
         }
         return;
       }
@@ -248,7 +251,7 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
   }
 
   void _showRenameDialog(Map<String, dynamic> folder) {
-    final TextEditingController controller = 
+    final TextEditingController controller =
         TextEditingController(text: folder['name']); // Pre-fill current name
 
     showDialog(
@@ -264,7 +267,8 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           ),
         ),
         actions: [
@@ -278,10 +282,9 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
               Navigator.pop(context); // Close the dialog
               _renameFolder(folder['id'], newName); // Save the new name
             },
-            child: const Text(
-              "Rename", 
-              style: TextStyle(color: AppColors.blue, fontWeight: FontWeight.bold)
-            ),
+            child: const Text("Rename",
+                style: TextStyle(
+                    color: AppColors.blue, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -313,35 +316,36 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
               onRefresh: _refreshAllData,
               color: AppColors.blue,
               child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-              children: [
-                _buildHeader(),
-                const SizedBox(height: 24),
-                _buildSearchBar(),
-                const SizedBox(height: 30),
-                _buildCategoryGrid(),
-                const SizedBox(height: 30),
-                _buildBackupCard(),
-                const SizedBox(height: 30),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text("All Folders",
-                        style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: -0.5)),
-                    TextButton(
-                        onPressed: _refreshAllData,
-                        child: const Text("Refresh",
-                            style: TextStyle(color: AppColors.blue))),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                _buildFolderGrid(crossAxisCount),
-                const SizedBox(height: 120), // Bottom padding for nav bar
-              ],
-            ),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                children: [
+                  _buildHeader(),
+                  const SizedBox(height: 24),
+                  _buildSearchBar(),
+                  const SizedBox(height: 30),
+                  _buildCategoryGrid(),
+                  const SizedBox(height: 30),
+                  _buildBackupCard(),
+                  const SizedBox(height: 30),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("All Folders",
+                          style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: -0.5)),
+                      TextButton(
+                          onPressed: _refreshAllData,
+                          child: const Text("Refresh",
+                              style: TextStyle(color: AppColors.blue))),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _buildFolderGrid(crossAxisCount),
+                  const SizedBox(height: 120), // Bottom padding for nav bar
+                ],
+              ),
             ),
           ),
         ),
@@ -369,158 +373,161 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
   }
 
 // ✅ UPDATED HEADER WITH BACKGROUND UPLOAD INDICATOR
- Widget _buildHeader() {
-  final manager = UploadManager();
+  Widget _buildHeader() {
+    final manager = UploadManager();
 
-  return ListenableBuilder(
-    listenable: manager,
-    builder: (context, _) {
-      final isUploading = manager.isUploadingNotifier.value;
-      final hasPaused = manager.uploadQueue.any((i) => i.status == 'paused');
-      final pausedCount = manager.uploadQueue.where((i) => i.status == 'paused').length;
+    return ListenableBuilder(
+      listenable: manager,
+      builder: (context, _) {
+        final isUploading = manager.isUploadingNotifier.value;
+        final hasPaused = manager.uploadQueue.any((i) => i.status == 'paused');
+        final pausedCount =
+            manager.uploadQueue.where((i) => i.status == 'paused').length;
 
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // ── Branded logo + title ──
-          Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [AppColors.blue, AppColors.purple],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.blue.withOpacity(0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // ── Branded logo + title ──
+            Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [AppColors.blue, AppColors.purple],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.shield_rounded,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "Cloud Guard",
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.5,
-                      height: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    "Encrypted cloud vault",
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: Colors.grey[500],
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-
-          // ── Upload / Paused status pill ──
-          if (isUploading)
-            GestureDetector(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const UploadPage()),
-              ),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.blue.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: AppColors.blue.withOpacity(0.15),
-                    width: 1,
-                  ),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation(AppColors.blue),
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.blue.withOpacity(0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
                       ),
-                    ),
-                    SizedBox(width: 8),
-                    Text(
-                      "Uploading",
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.shield_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Cloud Guard",
                       style: TextStyle(
-                        color: AppColors.blue,
-                        fontWeight: FontWeight.w700,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      "Encrypted cloud vault",
+                      style: TextStyle(
                         fontSize: 12.5,
+                        color: Colors.grey[500],
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.2,
                       ),
                     ),
                   ],
                 ),
-              ),
-            )
-          else if (hasPaused)
-            GestureDetector(
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const UploadPage()),
-              ),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: Colors.orange.withOpacity(0.15),
-                    width: 1,
+              ],
+            ),
+
+            // ── Upload / Paused status pill ──
+            if (isUploading)
+              GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const UploadPage()),
+                ),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: AppColors.blue.withOpacity(0.15),
+                      width: 1,
+                    ),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(AppColors.blue),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        "Uploading",
+                        style: TextStyle(
+                          color: AppColors.blue,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.pause_circle_filled,
-                      size: 15,
-                      color: Colors.orange,
+              )
+            else if (hasPaused)
+              GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const UploadPage()),
+                ),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: Colors.orange.withOpacity(0.15),
+                      width: 1,
                     ),
-                    const SizedBox(width: 6),
-                    Text(
-                      "$pausedCount Paused",
-                      style: const TextStyle(
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.pause_circle_filled,
+                        size: 15,
                         color: Colors.orange,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12.5,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 6),
+                      Text(
+                        "$pausedCount Paused",
+                        style: const TextStyle(
+                          color: Colors.orange,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-        ],
-      );
-    },
-  );
-}
+          ],
+        );
+      },
+    );
+  }
 
   Widget _buildSearchBar() {
     return GestureDetector(
@@ -772,35 +779,71 @@ Future<void> _renameFolder(dynamic folderId, String newName) async {
               ValueListenableBuilder<String>(
                 valueListenable: backupService.statusNotifier,
                 builder: (_, status, __) {
-                  final isIdle = status == "Idle" || progress <= 0;
-                  return Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
+                  return StreamBuilder<List<ConnectivityResult>>(
+                    stream: Connectivity().onConnectivityChanged,
+                    builder: (context, snapshot) {
+                      final connectivity =
+                          snapshot.data ?? [ConnectivityResult.none];
+                      final isOffline = connectivity
+                          .every((r) => r == ConnectivityResult.none);
+
+                      if (isOffline) {
+                        return const Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Padding(
+                                  padding: EdgeInsets.only(right: 6),
+                                  child: Icon(Icons.cloud_off_rounded,
+                                      color: Colors.white70, size: 16),
+                                ),
+                                Text(
+                                  "Waiting for internet connection...",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        );
+                      }
+
+                      final isIdle = status == "Idle" || progress <= 0;
+                      return Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          if (isIdle)
-                            const Padding(
-                              padding: EdgeInsets.only(right: 6),
-                              child: Icon(Icons.check_circle_rounded,
-                                  color: Colors.white70, size: 16),
-                            ),
-                          Text(
-                            isIdle ? "Everything up to date" : status,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (isIdle)
+                                const Padding(
+                                  padding: EdgeInsets.only(right: 6),
+                                  child: Icon(Icons.check_circle_rounded,
+                                      color: Colors.white70, size: 16),
+                                ),
+                              Text(
+                                isIdle ? "Everything up to date" : status,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
                           ),
+                          if (progress > 0)
+                            Text("${(progress * 100).toInt()}%",
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold)),
                         ],
-                      ),
-                      if (progress > 0)
-                        Text("${(progress * 100).toInt()}%",
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold)),
-                    ],
+                      );
+                    },
                   );
                 },
               ),

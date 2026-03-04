@@ -14,6 +14,7 @@ import 'services/upload_manager.dart';
 import 'auth/login_page.dart';
 import 'ui/onboarding_page.dart';
 import 'pages/vault_login_page.dart';
+import 'ui/widgets/offline_banner.dart';
 
 // 🔔 BACKGROUND NOTIFICATION HANDLER
 @pragma('vm:entry-point')
@@ -128,6 +129,11 @@ class MyDriveApp extends StatelessWidget {
           surfaceTintColor: Colors.transparent,
         ),
       ),
+      builder: (context, child) {
+        return OfflineBanner(
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: seenOnboarding ? const AuthGate() : const OnboardingPage(),
     );
   }
