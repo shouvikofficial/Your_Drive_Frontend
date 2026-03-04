@@ -45,6 +45,19 @@ class _FilesPageState extends State<FilesPage> {
   /// IDs of files the user has marked for offline access.
   Set<String> _offlineIds = {};
 
+  /// Scoped ScaffoldMessenger — all snackbars die with this page.
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
+
+  void _showSnack(SnackBar snackBar) {
+    _messengerKey.currentState
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(snackBar);
+  }
+
+  void _hideSnack() {
+    _messengerKey.currentState?.hideCurrentSnackBar();
+  }
+
   Future<Uint8List?> _getCachedThumbnail(Map<String, dynamic> file) {
     return ThumbnailCacheService.instance.get(
       file['id'],
@@ -280,7 +293,7 @@ class _FilesPageState extends State<FilesPage> {
           .eq('id', file['id']);
 
       if (resolvedName != newName && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        _showSnack(
           SnackBar(
             content: Text('Saved as "$resolvedName" to avoid duplicates.'),
           ),
@@ -291,10 +304,107 @@ class _FilesPageState extends State<FilesPage> {
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        _showSnack(
           SnackBar(content: Text('Rename failed: $e'), backgroundColor: Colors.red),
         );
       }
+    }
+  }
+  Future<void> _bulkRemoveOffline() async {
+    final files = selectedFiles.where((f) => _offlineIds.contains(f['id'])).toList();
+    setState(() { selectedFiles.clear(); isSelectionMode = false; });
+    for (final file in files) {
+      _removeOffline(file);
+    }
+  }
+
+  Future<void> _bulkMakeOffline() async {
+    final files = selectedFiles.where((f) => !_offlineIds.contains(f['id'])).toList();
+    setState(() { selectedFiles.clear(); isSelectionMode = false; });
+    if (files.isEmpty) {
+      _showSnack(
+        const SnackBar(content: Text('All selected files are already offline')),
+      );
+      return;
+    }
+    for (final file in files) {
+      _makeOffline(file);
+    }
+  }
+
+  Future<void> _bulkShare() async {
+    final files = selectedFiles.toList();
+    setState(() { selectedFiles.clear(); isSelectionMode = false; });
+
+    _showSnack(
+      SnackBar(
+        content: Row(children: [
+          const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+          const SizedBox(width: 12),
+          Text("Preparing ${files.length} files…"),
+        ]),
+        duration: const Duration(days: 1),
+      ),
+    );
+
+    try {
+      final List<XFile> xFiles = [];
+      for (var file in files) {
+        // Try offline file first, then temp cache, then download
+        final offlineFile = await OfflineFileService.instance
+            .getOfflineFile(file['id'], file['name']);
+        if (offlineFile != null) {
+          xFiles.add(XFile(offlineFile.path));
+          continue;
+        }
+
+        final dir = await getTemporaryDirectory();
+        final cacheFile = File("${dir.path}/msg_${file['message_id']}_${file['name']}");
+        if (cacheFile.existsSync()) {
+          xFiles.add(XFile(cacheFile.path));
+          continue;
+        }
+
+        // Download + decrypt
+        final supabase = Supabase.instance.client;
+        final fileData = await supabase
+            .from('files')
+            .select('iv, chunk_size, total_chunks')
+            .eq('message_id', file['message_id'])
+            .maybeSingle();
+        if (fileData == null) continue;
+
+        final url = "${Env.backendBaseUrl}/api/file/${file['message_id']}";
+        final response = await http.get(Uri.parse(url));
+        if (response.statusCode != 200) continue;
+
+        final decryptedFile = await _decryptFullFile(
+          response.bodyBytes,
+          fileData['iv'],
+          fileData['chunk_size'],
+          fileData['total_chunks'],
+          cacheFile,
+        );
+        xFiles.add(XFile(decryptedFile.path));
+      }
+
+      if (!mounted) return;
+      _hideSnack();
+
+      if (xFiles.isEmpty) {
+        _showSnack(
+          const SnackBar(content: Text('No files to share'), backgroundColor: Colors.orange),
+        );
+        return;
+      }
+
+      await Share.shareXFiles(xFiles);
+    } catch (e) {
+      if (!mounted) return;
+      _hideSnack();
+      _showSnack(
+        SnackBar(content: Text('Share failed: $e'), backgroundColor: Colors.red),
+      );
     }
   }
 
@@ -313,7 +423,7 @@ class _FilesPageState extends State<FilesPage> {
     );
 
     if (confirmed == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      _showSnack(
         const SnackBar(
           content: Row(
             children: [
@@ -337,7 +447,7 @@ class _FilesPageState extends State<FilesPage> {
           );
         }
       } finally {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        _hideSnack();
         await _loadData();
         if (mounted) setState(() {}); 
       }
@@ -351,7 +461,7 @@ class _FilesPageState extends State<FilesPage> {
       isSelectionMode = false;
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    _showSnack(
       SnackBar(
         content: Row(children: [
           const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
@@ -374,8 +484,8 @@ class _FilesPageState extends State<FilesPage> {
     }
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
+    _hideSnack();
+    _showSnack(
       SnackBar(
         content: Text(failed == 0
             ? "$success files downloaded successfully"
@@ -394,8 +504,8 @@ class _FilesPageState extends State<FilesPage> {
     if (!mounted) return;
     final count = _savingOfflineIds.length;
     if (count == 0) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
+    _hideSnack();
+    _showSnack(
       SnackBar(
         content: Row(children: [
           const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
@@ -471,8 +581,8 @@ class _FilesPageState extends State<FilesPage> {
 
       // Show final snackbar only when all queued saves finish
       if (_savingOfflineIds.isEmpty) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
+        _hideSnack();
+        _showSnack(
           const SnackBar(
             content: Row(children: [
               Icon(Icons.offline_pin, color: Colors.white, size: 18),
@@ -490,11 +600,11 @@ class _FilesPageState extends State<FilesPage> {
       _savingOfflineIds.remove(fileId);
       if (!mounted) return;
       if (_savingOfflineIds.isEmpty) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        _hideSnack();
       } else {
         _updateOfflineSnackbar();
       }
-      ScaffoldMessenger.of(context).showSnackBar(
+      _showSnack(
         SnackBar(content: Text('Offline save failed: $e'), backgroundColor: Colors.red),
       );
     }
@@ -506,7 +616,7 @@ class _FilesPageState extends State<FilesPage> {
     _offlineIds.remove(file['id']);
     _files.removeWhere((f) => f['id'] == file['id']);
     setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(
+    _showSnack(
       const SnackBar(
         content: Text('Removed from offline'),
         duration: Duration(seconds: 2),
@@ -518,7 +628,7 @@ class _FilesPageState extends State<FilesPage> {
 
   /// Single file download with user feedback
   Future<void> _downloadSingleFile(Map<String, dynamic> file) async {
-    ScaffoldMessenger.of(context).showSnackBar(
+    _showSnack(
       SnackBar(
         content: Row(children: [
           const SizedBox(
@@ -539,12 +649,12 @@ class _FilesPageState extends State<FilesPage> {
       );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      _hideSnack();
 
       final isGallery = savePath.startsWith("Gallery/");
       final displayName = savePath.split(Platform.pathSeparator).last.split('/').last;
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      _showSnack(
         SnackBar(
           content: Row(children: [
             Icon(
@@ -562,8 +672,8 @@ class _FilesPageState extends State<FilesPage> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
+      _hideSnack();
+      _showSnack(
         SnackBar(
           content: Text("Download failed: ${e.toString().replaceAll('Exception: ', '')}"),
           backgroundColor: Colors.red,
@@ -574,7 +684,7 @@ class _FilesPageState extends State<FilesPage> {
 
  Future<void> _shareFile(Map<String, dynamic> file) async {
   try {
-    ScaffoldMessenger.of(context).showSnackBar(
+    _showSnack(
       const SnackBar(content: Text("Preparing secure file…"), duration: Duration(days: 1)),
     );
 
@@ -609,7 +719,7 @@ class _FilesPageState extends State<FilesPage> {
     }
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    _hideSnack();
 
     final box = context.findRenderObject() as RenderBox?;
     await Share.shareXFiles(
@@ -618,8 +728,8 @@ class _FilesPageState extends State<FilesPage> {
     );
   } catch (e) {
     if (mounted) {
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
+      _hideSnack();
+      _showSnack(
         SnackBar(content: Text("Share failed: $e"), backgroundColor: Colors.red),
       );
     }
@@ -722,7 +832,9 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return ScaffoldMessenger(
+      key: _messengerKey,
+      child: Scaffold(
       backgroundColor: AppColors.bg,
       appBar: _buildAppBar(),
       floatingActionButton: (isSelectionMode || _isLoading) ? null : FloatingActionButton.extended(
@@ -744,7 +856,8 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
                 onRefresh: _refreshFiles,
                 child: isGridView ? _buildGrid(_files) : _buildList(_files),
               ),
-    );
+    ), // Scaffold
+    ); // ScaffoldMessenger
   }
 
   PreferredSizeWidget _buildAppBar() {
@@ -765,9 +878,63 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
             icon: Icon(selectedFiles.length == _files.length ? Icons.deselect : Icons.select_all, color: Colors.white),
             onPressed: _selectAll,
           ),
-          IconButton(icon: const Icon(Icons.download, color: Colors.white), onPressed: _bulkDownload),
-          IconButton(icon: const Icon(Icons.delete, color: Colors.white), onPressed: _bulkDelete),
-          const SizedBox(width: 8),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: Colors.white),
+            onSelected: (value) {
+              switch (value) {
+                case 'make_offline':
+                  _bulkMakeOffline();
+                  break;
+                case 'remove_offline':
+                  _bulkRemoveOffline();
+                  break;
+                case 'download':
+                  _bulkDownload();
+                  break;
+                case 'share':
+                  _bulkShare();
+                  break;
+                case 'delete':
+                  _bulkDelete();
+                  break;
+              }
+            },
+            itemBuilder: (_) {
+              final allOffline = selectedFiles.every((f) => _offlineIds.contains(f['id']));
+              return [
+              PopupMenuItem(
+                value: allOffline ? 'remove_offline' : 'make_offline',
+                child: ListTile(
+                  leading: Icon(
+                    allOffline ? Icons.cloud_off_outlined : Icons.offline_pin,
+                    color: allOffline ? Colors.grey : Colors.blueAccent,
+                  ),
+                  title: Text(allOffline ? 'Remove from offline' : 'Make available offline'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              const PopupMenuItem(value: 'download', child: ListTile(
+                leading: Icon(Icons.download_outlined),
+                title: Text('Download'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              )),
+              const PopupMenuItem(value: 'share', child: ListTile(
+                leading: Icon(Icons.share_outlined),
+                title: Text('Share'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              )),
+              const PopupMenuItem(value: 'delete', child: ListTile(
+                leading: Icon(Icons.delete_outline, color: Colors.red),
+                title: Text('Delete', style: TextStyle(color: Colors.red)),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              )),
+            ];},
+          ),
+          const SizedBox(width: 4),
         ],
       );
     }
@@ -1080,7 +1247,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
                   ThumbnailCacheService.instance.evict(file['id']);
                   _fetchFilesInitial();
                 },
-                onError: (e) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e))),
+                onError: (e) => _showSnack(SnackBar(content: Text(e))),
               );
             },
           ),
