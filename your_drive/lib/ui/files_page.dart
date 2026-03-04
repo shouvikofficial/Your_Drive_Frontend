@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:cryptography/cryptography.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../theme/app_colors.dart';
 import '../config/env.dart';
@@ -14,6 +15,7 @@ import '../services/file_service.dart';
 import '../services/download_service.dart';
 import '../services/vault_service.dart';
 import '../services/thumbnail_cache_service.dart';
+import '../services/offline_file_service.dart';
 import 'upload_page.dart';
 import 'file_viewer_page.dart';
 
@@ -40,10 +42,30 @@ class _FilesPageState extends State<FilesPage> {
   final Set<Map<String, dynamic>> selectedFiles = {};
   bool isSelectionMode = false;
 
+  /// IDs of files the user has marked for offline access.
+  Set<String> _offlineIds = {};
+
   Future<Uint8List?> _getCachedThumbnail(Map<String, dynamic> file) {
     return ThumbnailCacheService.instance.get(
       file['id'],
-      () => _getThumbnail(file),
+      () async {
+        // For offline-pinned files, try local sources first
+        if (_offlineIds.contains(file['id'])) {
+          // 1) Saved thumbnail
+          final offlineThumb = await OfflineFileService.instance
+              .getOfflineThumbnail(file['id']);
+          if (offlineThumb != null) return offlineThumb;
+
+          // 2) For images, use the offline file itself as thumbnail
+          final name = file['name'] as String? ?? '';
+          if (RegExp(r'\.(jpg|jpeg|png|gif|webp|bmp|heic)$', caseSensitive: false).hasMatch(name)) {
+            final offlineFile = await OfflineFileService.instance
+                .getOfflineFile(file['id'], name);
+            if (offlineFile != null) return offlineFile.readAsBytes();
+          }
+        }
+        return _getThumbnail(file);
+      },
     );
   }
 
@@ -65,7 +87,34 @@ class _FilesPageState extends State<FilesPage> {
   }
 
   Future<void> _loadData() async {
+    final offlineSvc = OfflineFileService.instance;
     try {
+      final connectivity = await Connectivity().checkConnectivity();
+      final isOffline = connectivity.every((r) => r == ConnectivityResult.none);
+
+      if (isOffline) {
+        // ── No internet: load from cache, show only offline files ──
+        final cached = await offlineSvc.getCachedFileList();
+        final ids = await offlineSvc.getOfflineFileIds();
+        _offlineIds = ids;
+        if (cached != null) {
+          var filtered = cached.where((f) => ids.contains(f['id']));
+          // Apply the same type/folder filter as the online query
+          if (widget.type != 'all') {
+            filtered = filtered.where((f) => f['type'] == widget.type);
+          } else if (widget.folderId != null) {
+            filtered = filtered.where((f) => f['folder_id'] == widget.folderId);
+          }
+          _files = filtered.toList();
+        } else {
+          _files = [];
+        }
+        selectedFiles.clear();
+        isSelectionMode = false;
+        return;
+      }
+
+      // ── Online: fetch from Supabase ──
       final supabase = Supabase.instance.client;
       var query = supabase.from('files').select();
 
@@ -79,9 +128,28 @@ class _FilesPageState extends State<FilesPage> {
       _files = List<Map<String, dynamic>>.from(response);
       selectedFiles.clear();
       isSelectionMode = false;
+
+      // Cache list & refresh offline IDs
+      await offlineSvc.cacheFileList(_files);
+      _offlineIds = await offlineSvc.getOfflineFileIds();
     } catch (e) {
       debugPrint("Error loading files: $e");
-      _loadError = e.toString();
+      // Attempt cached fallback on any network error
+      final cached = await offlineSvc.getCachedFileList();
+      final ids = await offlineSvc.getOfflineFileIds();
+      _offlineIds = ids;
+      if (cached != null && _files.isEmpty) {
+        var filtered = cached.where((f) => ids.contains(f['id']));
+        if (widget.type != 'all') {
+          filtered = filtered.where((f) => f['type'] == widget.type);
+        } else if (widget.folderId != null) {
+          filtered = filtered.where((f) => f['folder_id'] == widget.folderId);
+        }
+        _files = filtered.toList();
+        if (_files.isEmpty) _loadError = e.toString();
+      } else {
+        _loadError = e.toString();
+      }
     }
   }
 
@@ -313,6 +381,135 @@ class _FilesPageState extends State<FilesPage> {
             ? "$success files downloaded successfully"
             : "$success downloaded, $failed failed"),
         backgroundColor: failed == 0 ? Colors.green : Colors.orange,
+      ),
+    );
+  }
+
+  // --- Offline toggle ---
+
+  /// Files currently being saved for offline — prevents duplicate taps.
+  final Set<String> _savingOfflineIds = {};
+
+  void _updateOfflineSnackbar() {
+    if (!mounted) return;
+    final count = _savingOfflineIds.length;
+    if (count == 0) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(children: [
+          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+          const SizedBox(width: 12),
+          Text(count == 1
+              ? 'Making available offline…'
+              : 'Saving $count files offline…'),
+        ]),
+        duration: const Duration(days: 1),
+      ),
+    );
+  }
+
+  Future<void> _makeOffline(Map<String, dynamic> file) async {
+    final fileId = file['id'] as String;
+
+    // Prevent duplicate taps
+    if (_savingOfflineIds.contains(fileId) || _offlineIds.contains(fileId)) return;
+
+    _savingOfflineIds.add(fileId);
+    _updateOfflineSnackbar();
+
+    try {
+      // Reuse cached temp file or download + decrypt
+      final dir = await getTemporaryDirectory();
+      final cacheFile = File("${dir.path}/msg_${file['message_id']}_${file['name']}");
+
+      File decryptedFile;
+      if (cacheFile.existsSync()) {
+        decryptedFile = cacheFile;
+      } else {
+        final supabase = Supabase.instance.client;
+        final fileData = await supabase
+            .from('files')
+            .select('iv, chunk_size, total_chunks')
+            .eq('message_id', file['message_id'])
+            .maybeSingle();
+        if (fileData == null) throw Exception('Metadata missing');
+
+        final url = '${Env.backendBaseUrl}/api/file/${file['message_id']}';
+        final response = await http.get(Uri.parse(url));
+        if (response.statusCode != 200) throw Exception('Download failed');
+
+        decryptedFile = await _decryptFullFile(
+          response.bodyBytes,
+          fileData['iv'],
+          fileData['chunk_size'],
+          fileData['total_chunks'],
+          cacheFile,
+        );
+      }
+
+      await OfflineFileService.instance.saveToOffline(
+        fileId: fileId,
+        fileName: file['name'],
+        decryptedFile: decryptedFile,
+      );
+
+      // Also persist the thumbnail for offline display
+      try {
+        final thumbBytes = await ThumbnailCacheService.instance.get(
+          fileId, () => _getThumbnail(file),
+        );
+        if (thumbBytes != null) {
+          await OfflineFileService.instance.saveThumbnailOffline(fileId, thumbBytes);
+        }
+      } catch (_) {}
+
+      if (!mounted) return;
+      _offlineIds.add(fileId);
+      _savingOfflineIds.remove(fileId);
+      setState(() {});
+
+      // Show final snackbar only when all queued saves finish
+      if (_savingOfflineIds.isEmpty) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(children: [
+              Icon(Icons.offline_pin, color: Colors.white, size: 18),
+              SizedBox(width: 10),
+              Text('Available offline'),
+            ]),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      } else {
+        _updateOfflineSnackbar();
+      }
+    } catch (e) {
+      _savingOfflineIds.remove(fileId);
+      if (!mounted) return;
+      if (_savingOfflineIds.isEmpty) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      } else {
+        _updateOfflineSnackbar();
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Offline save failed: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Future<void> _removeOffline(Map<String, dynamic> file) async {
+    await OfflineFileService.instance.removeFromOffline(file['id'], file['name']);
+    if (!mounted) return;
+    _offlineIds.remove(file['id']);
+    _files.removeWhere((f) => f['id'] == file['id']);
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Removed from offline'),
+        duration: Duration(seconds: 2),
       ),
     );
   }
@@ -762,6 +959,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
         return _FileCard(
           file: file,
           isSelected: isSelected,
+          isOffline: _offlineIds.contains(file['id']),
           onTap: () {
             if (isSelectionMode) {
               _toggleSelection(file);
@@ -788,6 +986,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
         return _FileListItem(
           file: file,
           isSelected: isSelected,
+          isOffline: _offlineIds.contains(file['id']),
           onTap: () {
             if (isSelectionMode) {
               _toggleSelection(file);
@@ -820,6 +1019,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
   }
 
   void _showOptions(Map<String, dynamic> file) {
+    final isOffline = _offlineIds.contains(file['id']);
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -837,6 +1037,26 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
             leading: const Icon(Icons.drive_file_rename_outline),
             title: const Text("Rename"),
             onTap: () { Navigator.pop(context); _renameFile(file); },
+          ),
+          ListTile(
+            leading: _savingOfflineIds.contains(file['id'])
+                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                : Icon(
+                    isOffline ? Icons.cloud_off_outlined : Icons.offline_pin,
+                    color: isOffline ? Colors.grey : AppColors.blue,
+                  ),
+            title: Text(_savingOfflineIds.contains(file['id'])
+                ? "Saving…"
+                : isOffline ? "Remove from offline" : "Make available offline"),
+            enabled: !_savingOfflineIds.contains(file['id']),
+            onTap: () {
+              Navigator.pop(context);
+              if (isOffline) {
+                _removeOffline(file);
+              } else {
+                _makeOffline(file);
+              }
+            },
           ),
           ListTile(
             leading: const Icon(Icons.share_outlined),
@@ -944,6 +1164,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
 class _FileCard extends StatefulWidget {
   final Map<String, dynamic> file;
   final bool isSelected;
+  final bool isOffline;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onMore;
@@ -952,6 +1173,7 @@ class _FileCard extends StatefulWidget {
   const _FileCard({
     required this.file, 
     required this.isSelected, 
+    this.isOffline = false,
     required this.onTap, 
     required this.onLongPress,
     required this.onMore,
@@ -1043,6 +1265,20 @@ class _FileCardState extends State<_FileCard> {
                   child: Icon(Icons.check, size: 16, color: Colors.white),
                 ),
               ),
+            if (widget.isOffline && !widget.isSelected)
+              Positioned(
+                bottom: 42,
+                left: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.10), blurRadius: 4)],
+                  ),
+                  child: const Icon(Icons.offline_pin, size: 15, color: AppColors.blue),
+                ),
+              ),
           ],
         ),
       ),
@@ -1053,6 +1289,7 @@ class _FileCardState extends State<_FileCard> {
 class _FileListItem extends StatefulWidget {
   final Map<String, dynamic> file;
   final bool isSelected;
+  final bool isOffline;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onMore;
@@ -1061,6 +1298,7 @@ class _FileListItem extends StatefulWidget {
   const _FileListItem({
     required this.file,
     required this.isSelected,
+    this.isOffline = false,
     required this.onTap,
     required this.onLongPress,
     required this.onMore,
@@ -1172,6 +1410,10 @@ class _FileListItemState extends State<_FileListItem> {
                       _formatSize(widget.file['size']),
                       style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                     ),
+                  ],
+                  if (widget.isOffline) ...[
+                    const SizedBox(width: 6),
+                    const Icon(Icons.offline_pin, size: 14, color: AppColors.blue),
                   ],
                 ],
               ),

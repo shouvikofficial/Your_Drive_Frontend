@@ -17,6 +17,7 @@ import '../services/file_service.dart';
 import '../services/download_service.dart';
 import '../services/preview_cache_service.dart';
 import '../services/thumbnail_cache_service.dart';
+import '../services/offline_file_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FileViewerPage — Google-Drive-style viewer with swipe navigation
@@ -241,16 +242,107 @@ class _FileViewerPageState extends State<FileViewerPage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       isScrollControlled: true,
-      builder: (_) => _FileInfoSheet(
-        file: file,
-        onShare: () { Navigator.pop(context); _shareFile(file); },
-        onDownload: () {
-          Navigator.pop(context);
-          _downloadFile(file);
+      builder: (_) => FutureBuilder<bool>(
+        future: OfflineFileService.instance.isAvailableOffline(file['id']),
+        builder: (ctx, snap) {
+          final isOffline = snap.data ?? false;
+          return _FileInfoSheet(
+            file: file,
+            isOffline: isOffline,
+            onShare: () { Navigator.pop(context); _shareFile(file); },
+            onDownload: () {
+              Navigator.pop(context);
+              _downloadFile(file);
+            },
+            onDelete: () { Navigator.pop(context); _deleteFile(file); },
+            onOfflineToggle: () {
+              Navigator.pop(context);
+              _toggleOffline(file, isOffline);
+            },
+          );
         },
-        onDelete: () { Navigator.pop(context); _deleteFile(file); },
       ),
     );
+  }
+
+  Future<void> _toggleOffline(Map<String, dynamic> file, bool isCurrentlyOffline) async {
+    if (isCurrentlyOffline) {
+      await OfflineFileService.instance.removeFromOffline(file['id'], file['name']);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Removed from offline'), duration: Duration(seconds: 2)),
+        );
+      }
+    } else {
+      try {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(children: [
+              SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+              SizedBox(width: 12),
+              Text('Making available offline…'),
+            ]),
+            duration: Duration(days: 1),
+          ),
+        );
+
+        // Use the temp cache file or download + decrypt
+        final dir = await getTemporaryDirectory();
+        final cacheFile = File("${dir.path}/msg_${file['message_id']}_${file['name']}");
+
+        File decryptedFile;
+        if (cacheFile.existsSync()) {
+          decryptedFile = cacheFile;
+        } else {
+          final supabase = Supabase.instance.client;
+          final fileData = await supabase
+              .from('files')
+              .select('iv, chunk_size, total_chunks')
+              .eq('message_id', file['message_id'])
+              .maybeSingle();
+          if (fileData == null) throw Exception('Metadata missing');
+
+          final response = await http.get(
+            Uri.parse('${Env.backendBaseUrl}/api/file/${file['message_id']}'),
+          );
+          if (response.statusCode != 200) throw Exception('Download failed');
+
+          decryptedFile = await _decryptFullFile(
+            response.bodyBytes,
+            fileData['iv'] as String,
+            fileData['chunk_size'] as int,
+            fileData['total_chunks'] as int,
+            cacheFile,
+          );
+        }
+
+        await OfflineFileService.instance.saveToOffline(
+          fileId: file['id'],
+          fileName: file['name'],
+          decryptedFile: decryptedFile,
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(children: [
+              Icon(Icons.offline_pin, color: Colors.white, size: 18),
+              SizedBox(width: 10),
+              Text('Available offline'),
+            ]),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Offline save failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -375,6 +467,15 @@ class _SingleFileViewerState extends State<_SingleFileViewer>
   // ─── Load from in-memory cache first, then disk, then network ───────────
   Future<void> _loadFromCacheOrDownload() async {
     try {
+      // ⓪ Check persistent offline storage (instant — survives app restart)
+      final offlineFile = await OfflineFileService.instance
+          .getOfflineFile(widget.file['id'], _fileName);
+      if (offlineFile != null) {
+        if (mounted) setState(() => _loadingStatus = 'Opening offline file…');
+        await _openFile(offlineFile);
+        return;
+      }
+
       // ① Check in-memory image cache (instant — no I/O)
       if (_isImage(_fileName)) {
         final cached = _previewCache.getImage(_messageId);
@@ -576,15 +677,19 @@ class _SingleFileViewerState extends State<_SingleFileViewer>
 
 class _FileInfoSheet extends StatelessWidget {
   final Map<String, dynamic> file;
+  final bool isOffline;
   final VoidCallback onShare;
   final VoidCallback onDownload;
   final VoidCallback onDelete;
+  final VoidCallback? onOfflineToggle;
 
   const _FileInfoSheet({
     required this.file,
+    this.isOffline = false,
     required this.onShare,
     required this.onDownload,
     required this.onDelete,
+    this.onOfflineToggle,
   });
 
   @override
@@ -643,6 +748,13 @@ class _FileInfoSheet extends StatelessWidget {
             const SizedBox(height: 8),
 
             // Action tiles
+            if (onOfflineToggle != null)
+              _ActionTile(
+                icon: isOffline ? Icons.cloud_off_outlined : Icons.offline_pin,
+                label: isOffline ? 'Remove from offline' : 'Make available offline',
+                color: isOffline ? Colors.grey : Colors.blueAccent,
+                onTap: onOfflineToggle!,
+              ),
             _ActionTile(icon: Icons.share_outlined,    label: 'Share',    color: Colors.black87,    onTap: onShare),
             _ActionTile(icon: Icons.download_outlined, label: 'Download', color: Colors.black87,    onTap: onDownload),
             _ActionTile(icon: Icons.delete_outline,    label: 'Delete',   color: Colors.red,        onTap: onDelete),
