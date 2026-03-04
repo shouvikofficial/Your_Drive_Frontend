@@ -18,7 +18,7 @@ class _OfflineBannerState extends State<OfflineBanner>
   bool _isDismissed = false;
 
   late AnimationController _controller;
-  late Animation<Offset> _offsetAnimation;
+  late Animation<double> _sizeAnimation;
 
   @override
   void initState() {
@@ -26,50 +26,42 @@ class _OfflineBannerState extends State<OfflineBanner>
 
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 300),
+      duration: const Duration(milliseconds: 250),
     );
 
-    _offsetAnimation = Tween<Offset>(
-      begin: const Offset(0.0, -1.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
+    _sizeAnimation = CurvedAnimation(
       parent: _controller,
-      curve: Curves.easeOutCubic,
-    ));
+      curve: Curves.easeOut,
+    );
 
     _initConnectivity();
-
-    _subscription = Connectivity().onConnectivityChanged.listen((results) {
-      _updateConnectionStatus(results);
-    });
+    _subscription = Connectivity().onConnectivityChanged.listen(_update);
   }
 
   Future<void> _initConnectivity() async {
-    final results = await Connectivity().checkConnectivity();
-    _updateConnectionStatus(results);
+    _update(await Connectivity().checkConnectivity());
   }
 
-  void _updateConnectionStatus(List<ConnectivityResult> results) {
-    bool offline = results.every((r) => r == ConnectivityResult.none);
+  void _update(List<ConnectivityResult> results) {
+    final offline = results.every((r) => r == ConnectivityResult.none);
+    if (offline == _isOffline) return;
+    if (!mounted) return;
 
-    if (offline != _isOffline) {
-      if (mounted) {
-        setState(() {
-          _isOffline = offline;
-          // When connection status changes (e.g., from online to offline),
-          // we reset the dismissed state so the banner shows again.
-          if (_isOffline) {
-            _isDismissed = false;
-          }
-        });
+    setState(() {
+      _isOffline = offline;
+      if (offline) _isDismissed = false; // re-show on new disconnect
+    });
 
-        if (_isOffline && !_isDismissed) {
-          _controller.forward();
-        } else {
-          _controller.reverse();
-        }
-      }
+    if (offline && !_isDismissed) {
+      _controller.forward();
+    } else {
+      _controller.reverse();
     }
+  }
+
+  void _dismiss() {
+    setState(() => _isDismissed = true);
+    _controller.reverse();
   }
 
   @override
@@ -81,58 +73,38 @@ class _OfflineBannerState extends State<OfflineBanner>
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
+    return Column(
       children: [
-        widget.child,
-
-        // The overlay banner
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: SlideTransition(
-            position: _offsetAnimation,
+        // ── Banner (Google Drive style: flat strip) ──
+        SizeTransition(
+          sizeFactor: _sizeAnimation,
+          axisAlignment: -1,
+          child: GestureDetector(
+            onVerticalDragEnd: (_) => _dismiss(),
             child: Material(
-              elevation: 4,
+              color: Colors.grey[800],
               child: SafeArea(
                 bottom: false,
-                child: Container(
-                  width: double.infinity,
-                  color: Colors.redAccent,
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 8.0, horizontal: 16.0),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(
-                        Icons.cloud_off,
-                        color: Colors.white,
-                        size: 16,
-                      ),
-                      const SizedBox(width: 8),
+                      const Icon(Icons.cloud_off, color: Colors.white70, size: 16),
+                      const SizedBox(width: 10),
                       const Expanded(
                         child: Text(
                           'No internet connection',
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
                           ),
-                          textAlign: TextAlign.center,
                         ),
                       ),
                       GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            _isDismissed = true;
-                          });
-                          _controller.reverse();
-                        },
-                        child: const Icon(
-                          Icons.close,
-                          color: Colors.white,
-                          size: 18,
-                        ),
+                        onTap: _dismiss,
+                        child: const Icon(Icons.close, color: Colors.white70, size: 18),
                       ),
                     ],
                   ),
@@ -141,6 +113,9 @@ class _OfflineBannerState extends State<OfflineBanner>
             ),
           ),
         ),
+
+        // ── Main content ──
+        Expanded(child: widget.child),
       ],
     );
   }

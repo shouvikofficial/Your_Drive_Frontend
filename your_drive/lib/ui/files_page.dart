@@ -878,61 +878,9 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
             icon: Icon(selectedFiles.length == _files.length ? Icons.deselect : Icons.select_all, color: Colors.white),
             onPressed: _selectAll,
           ),
-          PopupMenuButton<String>(
+          IconButton(
             icon: const Icon(Icons.more_vert, color: Colors.white),
-            onSelected: (value) {
-              switch (value) {
-                case 'make_offline':
-                  _bulkMakeOffline();
-                  break;
-                case 'remove_offline':
-                  _bulkRemoveOffline();
-                  break;
-                case 'download':
-                  _bulkDownload();
-                  break;
-                case 'share':
-                  _bulkShare();
-                  break;
-                case 'delete':
-                  _bulkDelete();
-                  break;
-              }
-            },
-            itemBuilder: (_) {
-              final allOffline = selectedFiles.every((f) => _offlineIds.contains(f['id']));
-              return [
-              PopupMenuItem(
-                value: allOffline ? 'remove_offline' : 'make_offline',
-                child: ListTile(
-                  leading: Icon(
-                    allOffline ? Icons.cloud_off_outlined : Icons.offline_pin,
-                    color: allOffline ? Colors.grey : Colors.blueAccent,
-                  ),
-                  title: Text(allOffline ? 'Remove from offline' : 'Make available offline'),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                ),
-              ),
-              const PopupMenuItem(value: 'download', child: ListTile(
-                leading: Icon(Icons.download_outlined),
-                title: Text('Download'),
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-              )),
-              const PopupMenuItem(value: 'share', child: ListTile(
-                leading: Icon(Icons.share_outlined),
-                title: Text('Share'),
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-              )),
-              const PopupMenuItem(value: 'delete', child: ListTile(
-                leading: Icon(Icons.delete_outline, color: Colors.red),
-                title: Text('Delete', style: TextStyle(color: Colors.red)),
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-              )),
-            ];},
+            onPressed: () => _showBulkOptions(),
           ),
           const SizedBox(width: 4),
         ],
@@ -1183,6 +1131,50 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
       // Refresh list if a file was deleted from inside the viewer
       if (result == true) _fetchFilesInitial();
     });
+  }
+
+  void _showBulkOptions() {
+    final allOffline = selectedFiles.every((f) => _offlineIds.contains(f['id']));
+    final count = selectedFiles.length;
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 12),
+          Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10))),
+          const SizedBox(height: 8),
+          ListTile(
+            leading: Icon(
+              allOffline ? Icons.cloud_off_outlined : Icons.offline_pin,
+              color: allOffline ? Colors.grey : AppColors.blue,
+            ),
+            title: Text(allOffline ? 'Remove from offline' : 'Make available offline'),
+            onTap: () {
+              Navigator.pop(context);
+              if (allOffline) { _bulkRemoveOffline(); } else { _bulkMakeOffline(); }
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Download'),
+            onTap: () { Navigator.pop(context); _bulkDownload(); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.share_outlined),
+            title: const Text('Share'),
+            onTap: () { Navigator.pop(context); _bulkShare(); },
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete_outline, color: Colors.red),
+            title: const Text('Delete', style: TextStyle(color: Colors.red)),
+            onTap: () { Navigator.pop(context); _bulkDelete(); },
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
   }
 
   void _showOptions(Map<String, dynamic> file) {
