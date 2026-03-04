@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/app_colors.dart';
 import '../auth/login_page.dart';
+import '../services/upload_manager.dart';
+import '../services/backup_service.dart';
 import 'settings_pages.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -108,6 +110,11 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> logout() async {
+    // ── Stop everything before signing out ──
+    UploadManager().cancelAllAndReset();
+    BackupService().stopBackup();
+    BackupService().cancelBackgroundBackup();
+
     await Supabase.instance.client.auth.signOut();
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();

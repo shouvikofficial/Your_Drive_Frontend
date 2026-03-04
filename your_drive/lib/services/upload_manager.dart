@@ -437,6 +437,34 @@ class UploadManager extends ChangeNotifier {
     _persistQueue();
   }
 
+  /// Cancel every in-flight upload, clear queue, and reset all state.
+  /// Call this on logout to prevent uploads from leaking to another account.
+  void cancelAllAndReset() {
+    // 1. Cancel every active upload's network requests
+    for (final item in uploadQueue) {
+      item.cancelToken?.cancel("User logged out");
+      if (item.uploadId != null) {
+        ResumeStore.clear(item.uploadId!);
+      }
+    }
+
+    // 2. Clear queue
+    uploadQueue.clear();
+
+    // 3. Reset state flags
+    isUploading = false;
+    isUploadingNotifier.value = false;
+    hasPausedNotifier.value = false;
+    filesProcessed = 0;
+    totalFilesToProcess = 0;
+    _activeChunks = 0;
+    _persistDebounce?.cancel();
+    _persistScheduled = false;
+
+    notifyListeners();
+    _persistQueue();
+  }
+
   // ================= Secure Nonce =================
   List<int> _buildChunkNonce(List<int> baseNonce, int index) {
     final nonce = List<int>.from(baseNonce);
@@ -474,6 +502,9 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
     _immediateSync();
     return;
   }
+
+  // Capture user ID at start — used to guard against account switch mid-upload
+  final String startUserId = user.id;
 
   try {
     // ---------- File Info ----------
@@ -669,6 +700,7 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
               base64Encode(baseNonce),
               chunkSize,
               totalChunks,
+              startUserId,
             );
           }
 
@@ -763,11 +795,16 @@ if (thumbnailFuture != null) {
     String ivBase64,
     int chunkSize,
     int totalChunks,
+    String expectedUserId,
   ) async {
     final supabase = Supabase.instance.client;
     final user = supabase.auth.currentUser;
 
-    if (user == null) return;
+    // Guard: abort if user changed (logged out or switched accounts)
+    if (user == null || user.id != expectedUserId) {
+      debugPrint('[UploadManager] User changed — aborting save to Supabase');
+      return;
+    }
 
     final String? folderIdToSave =
         (currentFolderId == 'root' || currentFolderId == '')
