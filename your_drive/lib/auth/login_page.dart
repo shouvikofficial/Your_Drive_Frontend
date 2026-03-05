@@ -149,6 +149,43 @@ Future<void> _createSession() async {
       // ✅ create session
       await _createSession();
 
+      // ================= PREFETCH PROFILE DATA =================
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final user = supabase.auth.currentUser;
+        if (user != null) {
+          await prefs.setString('user_email', user.email ?? '');
+
+          final profileData = await supabase
+              .from('profiles')
+              .select('name, avatar_url')
+              .eq('id', user.id)
+              .maybeSingle();
+
+          if (profileData != null) {
+            await prefs.setString('user_name', profileData['name'] ?? 'User');
+            if (profileData['avatar_url'] != null) {
+              await prefs.setString('user_avatar_url', profileData['avatar_url']);
+            }
+          }
+
+          // Calculate standard files size to prefetch
+          final filesData = await supabase
+              .from('files')
+              .select('size')
+              .eq('user_id', user.id);
+          
+          int sum = 0;
+          for (var file in filesData) {
+            sum += (file['size'] as num? ?? 0).toInt();
+          }
+          await prefs.setInt('user_storage_used', sum);
+        }
+      } catch (e) {
+        debugPrint("Error prefetching profile: $e");
+      }
+      // =========================================================
+
       if (!mounted) return;
 
       // ✅ GO TO VAULT (Security Gate)
@@ -242,6 +279,43 @@ Future<void> googleLogin() async {
 
     // ✅ Create session
     await _createSession();
+
+    // ================= PREFETCH PROFILE DATA =================
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (user != null) {
+        await prefs.setString('user_email', user.email ?? '');
+
+        // Use the profile map we already queried or updated above
+        if (profile != null) {
+          await prefs.setString('user_name', profile['name'] ?? 'Google User');
+          if (profile['avatar_url'] != null) {
+            await prefs.setString('user_avatar_url', profile['avatar_url']);
+          }
+        } else {
+          // New profile was created
+          await prefs.setString('user_name', user.userMetadata?['full_name'] ?? 'Google User');
+          if (googleUser.photoUrl != null) {
+            await prefs.setString('user_avatar_url', googleUser.photoUrl!);
+          }
+        }
+
+        // Calculate standard files size to prefetch
+        final filesData = await supabase
+            .from('files')
+            .select('size')
+            .eq('user_id', user.id);
+        
+        int sum = 0;
+        for (var file in filesData) {
+          sum += (file['size'] as num? ?? 0).toInt();
+        }
+        await prefs.setInt('user_storage_used', sum);
+      }
+    } catch (e) {
+      debugPrint("Error prefetching profile (Google): $e");
+    }
+    // =========================================================
 
     if (!mounted) return;
 

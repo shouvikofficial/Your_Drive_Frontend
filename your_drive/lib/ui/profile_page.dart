@@ -214,41 +214,48 @@ class _ProfilePageState extends State<ProfilePage> {
                         ),
                         const SizedBox(height: 20),
 
-                        // Avatar with gradient ring and fallback icon
-                        Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: const LinearGradient(
-                              colors: [AppColors.blue, AppColors.purple],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppColors.blue.withOpacity(0.18),
-                                blurRadius: 18,
-                                offset: const Offset(0, 6),
+                        // Professional Avatar Design
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 4),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.15),
+                                    blurRadius: 20,
+                                    offset: const Offset(0, 10),
+                                  ),
+                                  BoxShadow(
+                                    color: AppColors.blue.withOpacity(0.3),
+                                    blurRadius: 30,
+                                    spreadRadius: 2,
+                                    offset: const Offset(0, 12),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                          child: CircleAvatar(
-                            radius: 44,
-                            backgroundColor: Colors.white.withOpacity(0.10),
-                            backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl!) : null,
-                            child: avatarUrl == null 
-                                ? (name.isNotEmpty && name.trim() != ''
-                                    ? Text(
-                                        name[0].toUpperCase(),
-                                        style: const TextStyle(
-                                          fontSize: 38,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Icon(Icons.person_rounded, size: 44, color: Colors.white70))
-                                : null,
-                          ),
+                              child: CircleAvatar(
+                                radius: 48,
+                                backgroundColor: Colors.white,
+                                backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl!) : null,
+                                child: avatarUrl == null 
+                                    ? (name.isNotEmpty && name.trim() != ''
+                                        ? Text(
+                                            name[0].toUpperCase(),
+                                            style: const TextStyle(
+                                              fontSize: 40,
+                                              fontWeight: FontWeight.w800,
+                                              color: AppColors.blue,
+                                            ),
+                                          )
+                                        : const Icon(Icons.person_rounded, size: 50, color: AppColors.blue))
+                                    : null,
+                              ),
+                            ),
+                            // Camera option removed as requested
+                          ],
                         ),
                         const SizedBox(height: 14),
 
