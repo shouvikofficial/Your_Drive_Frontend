@@ -782,10 +782,11 @@ class _DashboardPageState extends State<DashboardPage> {
                   return StreamBuilder<List<ConnectivityResult>>(
                     stream: Connectivity().onConnectivityChanged,
                     builder: (context, snapshot) {
-                      final connectivity =
-                          snapshot.data ?? [ConnectivityResult.none];
-                      final isOffline = connectivity
-                          .every((r) => r == ConnectivityResult.none);
+                      final isWaiting = snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData;
+                      final isOffline = !isWaiting && 
+                          snapshot.hasData && 
+                          snapshot.data!.isNotEmpty && 
+                          snapshot.data!.every((r) => r == ConnectivityResult.none);
 
                       if (isOffline) {
                         return const Row(

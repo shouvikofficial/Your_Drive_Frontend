@@ -103,7 +103,7 @@ class _FilesPageState extends State<FilesPage> {
     final offlineSvc = OfflineFileService.instance;
     try {
       final connectivity = await Connectivity().checkConnectivity();
-      final isOffline = connectivity.every((r) => r == ConnectivityResult.none);
+      final isOffline = connectivity.isNotEmpty && connectivity.every((r) => r == ConnectivityResult.none);
 
       if (isOffline) {
         // ── No internet: load from cache, show only offline files ──

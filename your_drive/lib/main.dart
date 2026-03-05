@@ -11,10 +11,12 @@ import 'package:path_provider/path_provider.dart';
 import 'config/env.dart';
 import 'services/backup_service.dart';
 import 'services/upload_manager.dart';
+import 'services/update_service.dart';
 import 'auth/login_page.dart';
 import 'ui/onboarding_page.dart';
 import 'pages/vault_login_page.dart';
 import 'ui/widgets/offline_banner.dart';
+import 'ui/widgets/update_dialog.dart';
 
 // 🔔 BACKGROUND NOTIFICATION HANDLER
 @pragma('vm:entry-point')
@@ -140,8 +142,28 @@ class MyDriveApp extends StatelessWidget {
 }
 
 /// 🔒 AUTH GATE
-class AuthGate extends StatelessWidget {
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  bool _updateChecked = false;
+
+  void _checkUpdate() {
+    if (_updateChecked) return;
+    _updateChecked = true;
+
+    // Run after the first frame so context is ready
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final info = await UpdateService.checkForUpdate();
+      if (info != null && mounted) {
+        UpdateDialog.show(context, info);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -162,8 +184,12 @@ class AuthGate extends StatelessWidget {
           return const LoginPage();
         }
 
+        // Check for updates once user is authenticated
+        _checkUpdate();
+
         return const VaultLoginPage();
       },
     );
   }
 }
+

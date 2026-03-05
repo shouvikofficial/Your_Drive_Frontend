@@ -43,7 +43,7 @@ class _OfflineBannerState extends State<OfflineBanner>
   }
 
   void _update(List<ConnectivityResult> results) {
-    final offline = results.every((r) => r == ConnectivityResult.none);
+    final offline = results.isNotEmpty && results.every((r) => r == ConnectivityResult.none);
     if (offline == _isOffline) return;
     if (!mounted) return;
 
