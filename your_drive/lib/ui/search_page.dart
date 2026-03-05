@@ -1216,7 +1216,7 @@ class _SearchResultCardState extends State<_SearchResultCard> {
                   if (snapshot.hasData && snapshot.data != null) {
                     return ClipRRect(
                       borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-                      child: Image.memory(snapshot.data!, fit: BoxFit.cover, width: double.infinity),
+                      child: Image.memory(snapshot.data!, fit: BoxFit.cover, width: double.infinity, cacheWidth: 300),
                     );
                   }
                   return Center(child: _FileIcon(type: widget.file['type'] ?? '', size: 42, fileName: widget.file['name']));
@@ -1335,7 +1335,7 @@ class _SearchResultListItemState extends State<_SearchResultListItem> {
                   );
                 }
                 if (snapshot.hasData && snapshot.data != null) {
-                  return Image.memory(snapshot.data!, fit: BoxFit.cover, width: 50, height: 50);
+                  return Image.memory(snapshot.data!, fit: BoxFit.cover, width: 50, height: 50, cacheWidth: 100, cacheHeight: 100);
                 }
                 return Container(
                   color: Colors.grey[100],

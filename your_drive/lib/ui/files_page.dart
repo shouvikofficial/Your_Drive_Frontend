@@ -1284,7 +1284,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
                   if (snapshot.hasData && snapshot.data != null) {
                     return ClipRRect(
                       borderRadius: BorderRadius.circular(16),
-                      child: Image.memory(snapshot.data!, width: 90, height: 90, fit: BoxFit.cover),
+                      child: Image.memory(snapshot.data!, width: 90, height: 90, fit: BoxFit.cover, cacheWidth: 180, cacheHeight: 180),
                     );
                   }
                   return Container(
@@ -1386,6 +1386,7 @@ class _FileCardState extends State<_FileCard> {
                             snapshot.data!,
                             fit: BoxFit.cover,
                             width: double.infinity,
+                            cacheWidth: 300, // Important fix: Limits memory usage strictly when decoding large original format offline images!
                           ),
                         );
                       }
@@ -1518,6 +1519,8 @@ class _FileListItemState extends State<_FileListItem> {
                         fit: BoxFit.cover,
                         width: 52,
                         height: 52,
+                        cacheWidth: 104, // 52 * 2 (pixel density) memory limit
+                        cacheHeight: 104,
                       );
                     }
                     return Container(
