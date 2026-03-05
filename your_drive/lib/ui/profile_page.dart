@@ -18,6 +18,7 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   String name = "User";
   String email = "";
+  String? avatarUrl;
   bool loading = true;
 
   int totalBytesUsed = 0;
@@ -38,6 +39,7 @@ class _ProfilePageState extends State<ProfilePage> {
       setState(() {
         name = prefs.getString('user_name') ?? "User";
         email = prefs.getString('user_email') ?? "";
+        avatarUrl = prefs.getString('user_avatar_url');
         totalBytesUsed = prefs.getInt('user_storage_used') ?? 0;
         if (name != "User") loading = false;
       });
@@ -65,7 +67,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
       final profileData = await supabase
           .from('profiles')
-          .select('name')
+          .select('name, avatar_url')
           .eq('id', user.id)
           .maybeSingle();
 
@@ -83,15 +85,20 @@ class _ProfilePageState extends State<ProfilePage> {
 
       final newName = profileData?['name'] ?? 'User';
       final newEmail = user.email ?? '';
+      final newAvatarUrl = profileData?['avatar_url'];
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('user_name', newName);
       await prefs.setString('user_email', newEmail);
+      if (newAvatarUrl != null) {
+        await prefs.setString('user_avatar_url', newAvatarUrl);
+      }
       await prefs.setInt('user_storage_used', sum);
 
       setState(() {
         name = newName;
         email = newEmail;
+        avatarUrl = newAvatarUrl;
         totalBytesUsed = sum;
         loading = false;
       });
@@ -228,16 +235,19 @@ class _ProfilePageState extends State<ProfilePage> {
                           child: CircleAvatar(
                             radius: 44,
                             backgroundColor: Colors.white.withOpacity(0.10),
-                            child: name.isNotEmpty && name.trim() != ''
-                                ? Text(
-                                    name[0].toUpperCase(),
-                                    style: const TextStyle(
-                                      fontSize: 38,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Icon(Icons.person_rounded, size: 44, color: Colors.white70),
+                            backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl!) : null,
+                            child: avatarUrl == null 
+                                ? (name.isNotEmpty && name.trim() != ''
+                                    ? Text(
+                                        name[0].toUpperCase(),
+                                        style: const TextStyle(
+                                          fontSize: 38,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Icon(Icons.person_rounded, size: 44, color: Colors.white70))
+                                : null,
                           ),
                         ),
                         const SizedBox(height: 14),

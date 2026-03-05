@@ -9,8 +9,10 @@ import 'package:device_info_plus/device_info_plus.dart';
 import '../theme/app_colors.dart';
 import '../ui/dashboard_page.dart'; 
 import '../auth/signup_page.dart';
+import '../auth/forgot_password_page.dart'; // ADD THIS IMPORT
 import '../services/biometric_service.dart'; 
 import '../pages/vault_login_page.dart'; // ✅ IMPORT VAULT PAGE
+import 'package:connectivity_plus/connectivity_plus.dart'; // ADD EXPERIMENTAL CONNECTIVITY
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -120,19 +122,32 @@ Future<void> _createSession() async {
       return;
     }
 
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(email)) {
+      showMsg("Please enter a valid email format");
+      return;
+    }
+
     setState(() => loading = true);
 
     try {
+      final connectivity = await Connectivity().checkConnectivity();
+      final isOffline = connectivity.isNotEmpty && connectivity.every((r) => r == ConnectivityResult.none);
+      if (isOffline) {
+        showMsg("No internet connection detected.");
+        setState(() => loading = false);
+        return;
+      }
+
       final supabase = Supabase.instance.client;
 
       await supabase.auth.signInWithPassword(
-  email: email,
-  password: password,
-);
+        email: email,
+        password: password,
+      );
 
-// ✅ create session
-await _createSession();
-
+      // ✅ create session
+      await _createSession();
 
       if (!mounted) return;
 
@@ -142,9 +157,13 @@ await _createSession();
         MaterialPageRoute(builder: (_) => const VaultLoginPage()),
       );
     } on AuthException catch (e) {
-      showMsg(e.message);
+      if (e.message.toLowerCase().contains("invalid login credentials")) {
+        showMsg("Incorrect email or password.");
+      } else {
+        showMsg(e.message);
+      }
     } catch (_) {
-      showMsg("Login failed. Please check your connection.");
+      showMsg("An unexpected error occurred. Please try again.");
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -212,7 +231,13 @@ Future<void> googleLogin() async {
         'id': user.id,
         'name': user.userMetadata?['full_name'] ?? 'Google User',
         'email': user.email,
+        'avatar_url': googleUser.photoUrl, // ✅ Save Google Avatar
       });
+    } else if (profile['avatar_url'] == null && googleUser.photoUrl != null) {
+      // ✅ Update avatar if it was previously missing
+      await supabase.from('profiles').update({
+        'avatar_url': googleUser.photoUrl,
+      }).eq('id', user.id);
     }
 
     // ✅ Create session
@@ -224,8 +249,10 @@ Future<void> googleLogin() async {
       context,
       MaterialPageRoute(builder: (_) => const VaultLoginPage()),
     );
+  } on AuthException catch (e) {
+    showMsg(e.message);
   } catch (e) {
-    showMsg("Unable to sign in with Google. Please try again.");
+    showMsg("Unable to sign in with Google. Please check your connection.");
   } finally {
     if (mounted) setState(() => loading = false);
   }
@@ -273,23 +300,45 @@ Future<void> googleLogin() async {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.cloud_circle,
-                          size: 60, color: Colors.blue),
-                      const SizedBox(height: 16),
+                      Container(
+                        width: 80,
+                        height: 80,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [AppColors.blue, AppColors.purple],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.blue.withOpacity(0.3),
+                              blurRadius: 20,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.shield_rounded,
+                          color: Colors.white,
+                          size: 40,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
                       const Text(
                         "Welcome Back",
                         style: TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
                           color: Colors.black87,
                         ),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Enter your credentials to access your drive",
+                        "Enter your credentials to access your vault",
                         textAlign: TextAlign.center,
-                        style:
-                            TextStyle(fontSize: 14, color: Colors.grey[600]),
+                        style: TextStyle(fontSize: 15, color: Colors.grey[600], height: 1.3),
                       ),
                       const SizedBox(height: 32),
 
@@ -307,7 +356,37 @@ Future<void> googleLogin() async {
                         isPassword: true,
                       ),
 
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 12),
+
+                      // FORGOT PASSWORD
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 4, top: 4),
+                          child: GestureDetector(
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                PageRouteBuilder(
+                                  pageBuilder: (_, __, ___) => const ForgotPasswordPage(),
+                                  transitionsBuilder: (_, anim, __, child) =>
+                                      FadeTransition(opacity: anim, child: child),
+                                  transitionDuration: const Duration(milliseconds: 250),
+                                ),
+                              );
+                            },
+                            child: Text(
+                              "Forgot Password?",
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 32),
 
                       // LOGIN BUTTON
                       SizedBox(
@@ -358,21 +437,22 @@ Future<void> googleLogin() async {
                       SizedBox(
                         width: double.infinity,
                         height: 50,
-                        child: OutlinedButton(
+                        child: OutlinedButton.icon(
                           onPressed: loading ? null : googleLogin,
-                          style: OutlinedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            side: const BorderSide(color: Colors.black12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                          child: const Text(
+                          icon: const Icon(Icons.g_mobiledata_rounded, size: 32, color: Colors.black87),
+                          label: const Text(
                             "Continue with Google",
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                               color: Colors.black87,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            side: const BorderSide(color: Colors.black12, width: 1.5),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
                             ),
                           ),
                         ),
@@ -433,6 +513,7 @@ Future<void> googleLogin() async {
         style: const TextStyle(fontSize: 16),
         decoration: InputDecoration(
           hintText: hint,
+          hintStyle: TextStyle(color: Colors.grey[500]),
           prefixIcon: Icon(icon, color: Colors.grey[600]),
           border: InputBorder.none,
           contentPadding:

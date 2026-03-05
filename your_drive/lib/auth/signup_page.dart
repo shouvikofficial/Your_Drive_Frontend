@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart'; // ADD EXPERIMENTAL CONNECTIVITY
 import '../theme/app_colors.dart';
 import '../pages/vault_login_page.dart';
 
@@ -92,9 +93,28 @@ Future<void> _createSession() async {
       return;
     }
 
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(emailText)) {
+      showMsg("Please enter a valid email format");
+      return;
+    }
+
+    if (passText.length < 6) {
+      showMsg("Password must be at least 6 characters long");
+      return;
+    }
+
     setState(() => loading = true);
 
     try {
+      final connectivity = await Connectivity().checkConnectivity();
+      final isOffline = connectivity.isNotEmpty && connectivity.every((r) => r == ConnectivityResult.none);
+      if (isOffline) {
+        showMsg("No internet connection detected.");
+        setState(() => loading = false);
+        return;
+      }
+
       final supabase = Supabase.instance.client;
 
       final res = await supabase.auth.signUp(
@@ -121,9 +141,13 @@ Future<void> _createSession() async {
       showMsg("Account created! Please login.");
       Navigator.pop(context);
     } on AuthException catch (e) {
-      showMsg(e.message);
+      if (e.message.toLowerCase().contains("already registered")) {
+        showMsg("This email is already registered. Please login.");
+      } else {
+        showMsg(e.message);
+      }
     } catch (e) {
-      showMsg("Signup failed. Please try again.");
+      showMsg("An unexpected error occurred. Please try again.");
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -186,13 +210,18 @@ Future<void> _createSession() async {
         .eq('id', user.id)
         .maybeSingle();
 
-    // 🆕 If new → create profile
+    // ✅ If profile does not exist → create it
     if (profile == null) {
       await supabase.from('profiles').insert({
         'id': user.id,
         'name': user.userMetadata?['full_name'] ?? 'Google User',
         'email': user.email,
+        'avatar_url': googleUser.photoUrl,
       });
+    } else if (profile['avatar_url'] == null && googleUser.photoUrl != null) {
+      await supabase.from('profiles').update({
+        'avatar_url': googleUser.photoUrl,
+      }).eq('id', user.id);
     }
 
     // ✅ Create session
@@ -206,8 +235,10 @@ Future<void> _createSession() async {
       MaterialPageRoute(builder: (_) => const VaultLoginPage()),
     );
 
+  } on AuthException catch (e) {
+    showMsg(e.message);
   } catch (e) {
-    showMsg("Unable to sign in with Google. Please try again.");
+    showMsg("Unable to sign in with Google. Please check your connection.");
   } finally {
     if (mounted) setState(() => loading = false);
   }
@@ -258,34 +289,44 @@ Future<void> _createSession() async {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 72,
-                        height: 72,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.blue,
+                        width: 80,
+                        height: 80,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [AppColors.blue, AppColors.purple],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black26,
-                              blurRadius: 10,
-                              offset: Offset(0, 4),
-                            )
+                              color: AppColors.blue.withOpacity(0.3),
+                              blurRadius: 20,
+                              offset: const Offset(0, 10),
+                            ),
                           ],
                         ),
-                        child: const Icon(Icons.cloud, size: 38, color: Colors.white),
+                        child: const Icon(
+                          Icons.shield_rounded,
+                          color: Colors.white,
+                          size: 40,
+                        ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 20),
                       const Text(
-                        "Your Drive",
+                        "Create Account",
                         style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
                           color: Colors.black87,
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 8),
                       Text(
-                        "Create your secure account",
-                        style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                        "Start securing your files with Cloud Guard",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 15, color: Colors.grey[600], height: 1.3),
                       ),
                       const SizedBox(height: 32),
 
@@ -331,16 +372,23 @@ Future<void> _createSession() async {
                       SizedBox(
                         width: double.infinity,
                         height: 50,
-                        child: OutlinedButton(
+                        child: OutlinedButton.icon(
                           onPressed: loading ? null : googleSignup,
+                          icon: const Icon(Icons.g_mobiledata_rounded, size: 32, color: Colors.black87),
+                          label: const Text(
+                            "Continue with Google",
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
                           style: OutlinedButton.styleFrom(
                             backgroundColor: Colors.white,
-                            side: const BorderSide(color: Colors.black12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                          ),
-                          child: const Text(
-                            "Continue with Google",
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black87),
+                            side: const BorderSide(color: Colors.black12, width: 1.5),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
                           ),
                         ),
                       ),

@@ -1719,6 +1719,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   bool _saving = false;
   bool _isGoogleUser = false;
   String _originalEmail = '';
+  String? _avatarUrl;
 
   @override
   void initState() {
@@ -1737,6 +1738,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         _nameCtrl.text = prefs.getString('user_name') ?? '';
         _emailCtrl.text = prefs.getString('user_email') ?? user?.email ?? '';
         _originalEmail = _emailCtrl.text;
+        _avatarUrl = prefs.getString('user_avatar_url');
       });
     }
   }
@@ -1888,16 +1890,19 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   CircleAvatar(
                     radius: 50,
                     backgroundColor: AppColors.blue.withOpacity(0.1),
-                    child: Text(
-                      _nameCtrl.text.isNotEmpty
-                          ? _nameCtrl.text[0].toUpperCase()
-                          : 'U',
-                      style: const TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.blue,
-                      ),
-                    ),
+                    backgroundImage: _avatarUrl != null ? NetworkImage(_avatarUrl!) : null,
+                    child: _avatarUrl == null
+                        ? Text(
+                            _nameCtrl.text.isNotEmpty
+                                ? _nameCtrl.text[0].toUpperCase()
+                                : 'U',
+                            style: const TextStyle(
+                              fontSize: 36,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.blue,
+                            ),
+                          )
+                        : null,
                   ),
                   Positioned(
                     bottom: 0,
