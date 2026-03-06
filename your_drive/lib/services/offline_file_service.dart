@@ -32,12 +32,21 @@ class OfflineFileService {
   }) async {
     final dir = await _offlineDirectory();
     final target = File('${dir.path}/${fileId}_$fileName');
-    await decryptedFile.copy(target.path);
+    
+    try {
+      await decryptedFile.copy(target.path);
+    } catch (e) {
+      // Fallback if file is locked (e.g., video playing on Windows)
+      // Stream the file instead of loading the entire content into memory
+      final sink = target.openWrite();
+      await decryptedFile.openRead().pipe(sink);
+      await sink.close();
+    }
 
     // Register the ID
     final prefs = await SharedPreferences.getInstance();
     final ids = _getOfflineIds(prefs);
-    ids.add(fileId);
+    ids.add(fileId.toString()); // Safecast to string just in case
     await prefs.setStringList(_offlineIdsKey, ids.toList());
     debugPrint('[Offline] Saved: $fileName');
   }

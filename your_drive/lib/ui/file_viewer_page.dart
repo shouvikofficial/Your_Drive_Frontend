@@ -335,7 +335,9 @@ class _FileViewerPageState extends State<FileViewerPage> {
             duration: Duration(seconds: 3),
           ),
         );
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint('OFFLINE SAVE ERROR: $e');
+        debugPrint('STACKTRACE: $st');
         if (!mounted) return;
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(

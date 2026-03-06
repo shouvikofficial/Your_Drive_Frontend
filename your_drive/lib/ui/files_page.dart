@@ -318,18 +318,29 @@ class _FilesPageState extends State<FilesPage> {
     }
   }
 
-  Future<void> _bulkMakeOffline() async {
-    final files = selectedFiles.where((f) => !_offlineIds.contains(f['id'])).toList();
-    setState(() { selectedFiles.clear(); isSelectionMode = false; });
-    if (files.isEmpty) {
-      _showSnack(
-        const SnackBar(content: Text('All selected files are already offline')),
-      );
-      return;
-    }
-    for (final file in files) {
-      _makeOffline(file);
-    }
+  // --- Offline Queue Mechanism ---
+
+  final Set<String> _savingOfflineIds = {};
+  final List<Map<String, dynamic>> _offlineQueue = [];
+  bool _isProcessingOffline = false;
+
+  void _updateOfflineSnackbar() {
+    if (!mounted) return;
+    final count = _savingOfflineIds.length;
+    if (count == 0) return;
+    _hideSnack();
+    _showSnack(
+      SnackBar(
+        content: Row(children: [
+          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+          const SizedBox(width: 12),
+          Text(count == 1
+              ? 'Making available offline…'
+              : 'Saving $count files offline…'),
+        ]),
+        duration: const Duration(days: 1),
+      ),
+    );
   }
 
   Future<void> _bulkShare() async {
@@ -350,9 +361,7 @@ class _FilesPageState extends State<FilesPage> {
     try {
       final List<XFile> xFiles = [];
       for (var file in files) {
-        // Try offline file first, then temp cache, then download
-        final offlineFile = await OfflineFileService.instance
-            .getOfflineFile(file['id'], file['name']);
+        final offlineFile = await OfflineFileService.instance.getOfflineFile(file['id'], file['name']);
         if (offlineFile != null) {
           xFiles.add(XFile(offlineFile.path));
           continue;
@@ -365,13 +374,8 @@ class _FilesPageState extends State<FilesPage> {
           continue;
         }
 
-        // Download + decrypt
         final supabase = Supabase.instance.client;
-        final fileData = await supabase
-            .from('files')
-            .select('iv, chunk_size, total_chunks')
-            .eq('message_id', file['message_id'])
-            .maybeSingle();
+        final fileData = await supabase.from('files').select('iv, chunk_size, total_chunks').eq('message_id', file['message_id']).maybeSingle();
         if (fileData == null) continue;
 
         final url = "${Env.backendBaseUrl}/api/file/${file['message_id']}";
@@ -379,11 +383,7 @@ class _FilesPageState extends State<FilesPage> {
         if (response.statusCode != 200) continue;
 
         final decryptedFile = await _decryptFullFile(
-          response.bodyBytes,
-          fileData['iv'],
-          fileData['chunk_size'],
-          fileData['total_chunks'],
-          cacheFile,
+          response.bodyBytes, fileData['iv'], fileData['chunk_size'], fileData['total_chunks'], cacheFile,
         );
         xFiles.add(XFile(decryptedFile.path));
       }
@@ -392,9 +392,7 @@ class _FilesPageState extends State<FilesPage> {
       _hideSnack();
 
       if (xFiles.isEmpty) {
-        _showSnack(
-          const SnackBar(content: Text('No files to share'), backgroundColor: Colors.orange),
-        );
+        _showSnack(const SnackBar(content: Text('No files to share'), backgroundColor: Colors.orange));
         return;
       }
 
@@ -402,9 +400,7 @@ class _FilesPageState extends State<FilesPage> {
     } catch (e) {
       if (!mounted) return;
       _hideSnack();
-      _showSnack(
-        SnackBar(content: Text('Share failed: $e'), backgroundColor: Colors.red),
-      );
+      _showSnack(SnackBar(content: Text('Share failed: $e'), backgroundColor: Colors.red));
     }
   }
 
@@ -425,13 +421,11 @@ class _FilesPageState extends State<FilesPage> {
     if (confirmed == true) {
       _showSnack(
         const SnackBar(
-          content: Row(
-            children: [
-              SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-              SizedBox(width: 15),
-              Text("Deleting files..."),
-            ],
-          ),
+          content: Row(children: [
+            SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+            SizedBox(width: 15),
+            Text("Deleting files..."),
+          ]),
           duration: Duration(days: 1),
         ),
       );
@@ -456,10 +450,7 @@ class _FilesPageState extends State<FilesPage> {
 
   Future<void> _bulkDownload() async {
     final files = selectedFiles.toList();
-    setState(() {
-      selectedFiles.clear();
-      isSelectionMode = false;
-    });
+    setState(() { selectedFiles.clear(); isSelectionMode = false; });
 
     _showSnack(
       SnackBar(
@@ -485,128 +476,162 @@ class _FilesPageState extends State<FilesPage> {
 
     if (!mounted) return;
     _hideSnack();
-    _showSnack(
-      SnackBar(
-        content: Text(failed == 0
-            ? "$success files downloaded successfully"
-            : "$success downloaded, $failed failed"),
-        backgroundColor: failed == 0 ? Colors.green : Colors.orange,
-      ),
-    );
+    _showSnack(SnackBar(
+      content: Text(failed == 0 ? "$success files downloaded successfully" : "$success downloaded, $failed failed"),
+      backgroundColor: failed == 0 ? Colors.green : Colors.orange,
+    ));
   }
 
-  // --- Offline toggle ---
+  Future<void> _bulkMakeOffline() async {
+    final files = selectedFiles.where((f) => !_offlineIds.contains(f['id'])).toList();
+    setState(() { selectedFiles.clear(); isSelectionMode = false; });
+    
+    if (files.isEmpty) {
+      _showSnack(const SnackBar(content: Text('All selected files are already offline')));
+      return;
+    }
 
-  /// Files currently being saved for offline — prevents duplicate taps.
-  final Set<String> _savingOfflineIds = {};
-
-  void _updateOfflineSnackbar() {
-    if (!mounted) return;
-    final count = _savingOfflineIds.length;
-    if (count == 0) return;
-    _hideSnack();
-    _showSnack(
-      SnackBar(
-        content: Row(children: [
-          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-          const SizedBox(width: 12),
-          Text(count == 1
-              ? 'Making available offline…'
-              : 'Saving $count files offline…'),
-        ]),
-        duration: const Duration(days: 1),
-      ),
-    );
+    for (final f in files) {
+      final fileId = f['id'] as String;
+      if (!_savingOfflineIds.contains(fileId)) {
+        _savingOfflineIds.add(fileId);
+        _offlineQueue.add(f);
+      }
+    }
+    
+    setState(() {});
+    _updateOfflineSnackbar();
+    
+    _processOfflineQueue();
   }
 
   Future<void> _makeOffline(Map<String, dynamic> file) async {
     final fileId = file['id'] as String;
-
-    // Prevent duplicate taps
     if (_savingOfflineIds.contains(fileId) || _offlineIds.contains(fileId)) return;
-
-    _savingOfflineIds.add(fileId);
+    
+    setState(() { _savingOfflineIds.add(fileId); });
+    _offlineQueue.add(file);
     _updateOfflineSnackbar();
+    
+    _processOfflineQueue();
+  }
+
+  Future<void> _processOfflineQueue() async {
+    if (_isProcessingOffline) return; // Prevent concurrent queue processors
+    _isProcessingOffline = true;
+
+    // Use a shared client for all files in the queue to reuse sockets and prevent exhaustion
+    final client = http.Client();
 
     try {
-      // Reuse cached temp file or download + decrypt
-      final dir = await getTemporaryDirectory();
-      final cacheFile = File("${dir.path}/msg_${file['message_id']}_${file['name']}");
+      while (_offlineQueue.isNotEmpty) {
+        if (!mounted) break;
+        final file = _offlineQueue.removeAt(0);
+        final fileId = file['id'] as String;
 
-      File decryptedFile;
-      if (cacheFile.existsSync()) {
-        decryptedFile = cacheFile;
-      } else {
-        final supabase = Supabase.instance.client;
-        final fileData = await supabase
-            .from('files')
-            .select('iv, chunk_size, total_chunks')
-            .eq('message_id', file['message_id'])
-            .maybeSingle();
-        if (fileData == null) throw Exception('Metadata missing');
+        try {
+          final dir = await getTemporaryDirectory();
+          final cacheFile = File("${dir.path}/msg_${file['message_id']}_${file['name']}");
 
-        final url = '${Env.backendBaseUrl}/api/file/${file['message_id']}';
-        final response = await http.get(Uri.parse(url));
-        if (response.statusCode != 200) throw Exception('Download failed');
+          File decryptedFile;
+          if (cacheFile.existsSync()) {
+            decryptedFile = cacheFile;
+          } else {
+            final supabase = Supabase.instance.client;
+            final fileData = await supabase
+                .from('files')
+                .select('iv, chunk_size, total_chunks')
+                .eq('message_id', file['message_id'])
+                .maybeSingle();
+            if (fileData == null) throw Exception('Metadata missing');
 
-        decryptedFile = await _decryptFullFile(
-          response.bodyBytes,
-          fileData['iv'],
-          fileData['chunk_size'],
-          fileData['total_chunks'],
-          cacheFile,
-        );
-      }
+            final url = '${Env.backendBaseUrl}/api/file/${file['message_id']}';
+            
+            // Use the shared client and a timeout to prevent hanging forever
+            final response = await client.get(Uri.parse(url)).timeout(const Duration(minutes: 5));
+            if (response.statusCode != 200) throw Exception('Download failed');
 
-      await OfflineFileService.instance.saveToOffline(
-        fileId: fileId,
-        fileName: file['name'],
-        decryptedFile: decryptedFile,
-      );
+            decryptedFile = await _decryptFullFile(
+              response.bodyBytes,
+              fileData['iv'],
+              fileData['chunk_size'],
+              fileData['total_chunks'],
+              cacheFile,
+            );
+          }
 
-      // Also persist the thumbnail for offline display
-      try {
-        final thumbBytes = await ThumbnailCacheService.instance.get(
-          fileId, () => _getThumbnail(file),
-        );
-        if (thumbBytes != null) {
-          await OfflineFileService.instance.saveThumbnailOffline(fileId, thumbBytes);
+          await OfflineFileService.instance.saveToOffline(
+            fileId: fileId,
+            fileName: file['name'],
+            decryptedFile: decryptedFile,
+          );
+
+          try {
+            // Crucial fix: Do not use the ThumbnailCacheService here for bulk operations!
+            // It tries to decode images into memory which crashes the app after ~150 files.
+            // Instead, just fetch the raw encrypted bytes and save them directly.
+            if (file['thumbnail_id'] != null) {
+              final thumbIvBase64 = file['thumbnail_iv'] as String? ?? await _fetchThumbnailIv(file['message_id']);
+              if (thumbIvBase64 != null) {
+                final url = "${Env.backendBaseUrl}/api/thumbnail/${file['thumbnail_id']}";
+                final response = await client.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+                if (response.statusCode == 200) {
+                   final secretKey = await VaultService().getSecretKey();
+                   final algorithm = AesGcm.with256bits();
+                   final nonce = base64Decode(thumbIvBase64);
+                   final encryptedBytes = response.bodyBytes;
+                   final macBytes = encryptedBytes.sublist(encryptedBytes.length - 16);
+                   final cipherText = encryptedBytes.sublist(0, encryptedBytes.length - 16);
+                   
+                   final decrypted = await algorithm.decrypt(
+                     SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
+                     secretKey: secretKey,
+                   );
+                   await OfflineFileService.instance.saveThumbnailOffline(fileId, Uint8List.fromList(decrypted));
+                }
+              }
+            }
+          } catch (e) {
+            debugPrint('Failed to save thumbnail offline: $e');
+            // Do not fail the whole file just because thumbnail failed
+          }
+
+          if (mounted) {
+            setState(() { _offlineIds.add(fileId); });
+          }
+          
+          // CRITICAL: Give the UI thread a tiny breather to GC and update layout
+          // Without this, processing 800 items blocks the event loop and crashes the OS sockets
+          await Future.delayed(const Duration(milliseconds: 50));
+          
+        } catch (e) {
+          debugPrint('Bulk offline single file error: $e');
+          if (mounted) {
+            _showSnack(SnackBar(content: Text("Failed to save ${file['name']} offline"), backgroundColor: Colors.red));
+          }
+        } finally {
+          if (mounted) {
+            setState(() { _savingOfflineIds.remove(fileId); });
+            if (_offlineQueue.isNotEmpty) {
+              // Throttle snackbar updates for massive queues to stop UI freezing
+              if (_offlineQueue.length % 5 == 0 || _offlineQueue.length < 5) {
+                _updateOfflineSnackbar(); // Update countdown!
+              }
+            }
+          }
         }
-      } catch (_) {}
-
-      if (!mounted) return;
-      _offlineIds.add(fileId);
-      _savingOfflineIds.remove(fileId);
-      setState(() {});
-
-      // Show final snackbar only when all queued saves finish
-      if (_savingOfflineIds.isEmpty) {
-        _hideSnack();
-        _showSnack(
-          const SnackBar(
-            content: Row(children: [
-              Icon(Icons.offline_pin, color: Colors.white, size: 18),
-              SizedBox(width: 10),
-              Text('Available offline'),
-            ]),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      } else {
-        _updateOfflineSnackbar();
       }
-    } catch (e) {
-      _savingOfflineIds.remove(fileId);
-      if (!mounted) return;
-      if (_savingOfflineIds.isEmpty) {
-        _hideSnack();
-      } else {
-        _updateOfflineSnackbar();
-      }
-      _showSnack(
-        SnackBar(content: Text('Offline save failed: $e'), backgroundColor: Colors.red),
-      );
+    } finally {
+      client.close(); // Crucial: close the client when the queue is finished or aborted
+      _isProcessingOffline = false;
+    }
+
+    if (mounted && _savingOfflineIds.isEmpty) {
+      _hideSnack();
+      _showSnack(const SnackBar(
+        content: Row(children: [Icon(Icons.offline_pin, color: Colors.white, size: 18), SizedBox(width: 10), Text('Available offline')]),
+        backgroundColor: Colors.green, duration: Duration(seconds: 3),
+      ));
     }
   }
 
@@ -1134,8 +1159,15 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
   }
 
   void _showBulkOptions() {
+    // True only if EVERY selected file is already offline.
     final allOffline = selectedFiles.every((f) => _offlineIds.contains(f['id']));
-    final count = selectedFiles.length;
+    
+    // True if EVERY selected file is NOT offline.
+    final noneOffline = selectedFiles.every((f) => !_offlineIds.contains(f['id']));
+    
+    // If it's a mix, we default to offering the "Make available offline" action 
+    // which will skip already-offline files correctly via _bulkMakeOffline filtering.
+
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
