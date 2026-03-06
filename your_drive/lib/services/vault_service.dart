@@ -14,37 +14,54 @@ class VaultService {
   final _secureStorage = const FlutterSecureStorage();
 
   // ============================================================
-  // 🔍 CHECK IF USER HAS PIN (WITH LOCAL CACHE)
+  // 🔍 CHECK IF USER HAS PIN (ONLINE FIRST, THEN LOCAL CACHE)
   // ============================================================
   Future<bool> isVaultSetup() async {
-    // Check local cache first
-    final localSalt = await _secureStorage.read(key: 'vault_salt');
-    if (localSalt != null) return true;
-
-    // Try fetching from server
+    // Try fetching from server FIRST (if online) to prevent desync
     try {
       final supabase = Supabase.instance.client;
-      final user = supabase.auth.currentUser;
+      final session = supabase.auth.currentSession;
 
-      if (user == null) return false;
+      if (session != null) {
+        // Network calls with timeout
+        final profileFuture = supabase
+            .from('profiles')
+            .select('vault_salt')
+            .eq('id', session.user.id)
+            .single()
+            .timeout(const Duration(seconds: 3));
 
-      final response = await supabase
-          .from('profiles')
-          .select('vault_salt')
-          .eq('id', user.id)
-          .single();
+        final userFuture = supabase.auth.getUser().timeout(const Duration(seconds: 3));
 
-      final salt = response['vault_salt'];
-      if (salt != null) {
-        // Cache salt locally for offline use
-        await _secureStorage.write(key: 'vault_salt', value: salt);
-        return true;
+        final results = await Future.wait([profileFuture, userFuture]);
+        final response = results[0] as Map<String, dynamic>;
+        final userResponse = results[1] as UserResponse;
+
+        final saltBase64 = response['vault_salt'];
+        final vaultHashBase64 = userResponse.user?.userMetadata?['vault_hash'];
+
+        if (saltBase64 != null && vaultHashBase64 != null) {
+          // Cache locally for offline use
+          await _secureStorage.write(key: 'vault_salt', value: saltBase64);
+          await _secureStorage.write(key: 'vault_hash', value: vaultHashBase64);
+          return true;
+        } else if (saltBase64 == null) {
+          // Wiped remotely
+          await _secureStorage.delete(key: 'vault_salt');
+          await _secureStorage.delete(key: 'vault_hash');
+          return false;
+        }
       }
-      return false;
-    } catch (e) {
-      // Offline — no local salt means vault not setup
-      return false;
+    } catch (_) {
+      // Offline fallback
     }
+
+    // Check local cache fallback
+    final localSalt = await _secureStorage.read(key: 'vault_salt');
+    final localHash = await _secureStorage.read(key: 'vault_hash');
+    if (localSalt != null && localHash != null) return true;
+
+    return false;
   }
 
   // ============================================================
@@ -72,16 +89,28 @@ class VaultService {
       nonce: salt,
     );
 
+    // ✅ Compute a SHA-256 hash of the derived key to verify PIN later
+    final secretKeyBytes = await secretKey.extractBytes();
+    final hashAlgorithm = Sha256();
+    final hash = await hashAlgorithm.hash(secretKeyBytes);
+    final vaultHashBase64 = base64Encode(hash.bytes);
+
     final saltBase64 = base64Encode(salt);
 
-    // ✅ Save salt to Supabase
+    // ✅ Save salt to Supabase profile
     await supabase
         .from('profiles')
         .update({'vault_salt': saltBase64})
         .eq('id', user.id);
 
-    // ✅ Cache salt locally for offline unlock
+    // ✅ Save hash to Supabase auth user metadata
+    await supabase.auth.updateUser(
+      UserAttributes(data: {'vault_hash': vaultHashBase64}),
+    );
+
+    // ✅ Cache salt AND hash locally for offline unlock
     await _secureStorage.write(key: 'vault_salt', value: saltBase64);
+    await _secureStorage.write(key: 'vault_hash', value: vaultHashBase64);
 
     // Cache key in memory
     _cachedSecretKey = secretKey;
@@ -92,37 +121,48 @@ class VaultService {
   // ============================================================
   Future<bool> unlockVault(String pin) async {
     String? saltBase64;
+    String? vaultHashBase64;
 
-    // 1️⃣ Try local cache first
-    saltBase64 = await _secureStorage.read(key: 'vault_salt');
+    // 1️⃣ Try fetching from server FIRST
+    try {
+      final supabase = Supabase.instance.client;
+      final session = supabase.auth.currentSession;
 
-    // 2️⃣ If not cached, try fetching from server
-    if (saltBase64 == null) {
-      try {
-        final supabase = Supabase.instance.client;
-        final user = supabase.auth.currentUser;
-
-        if (user == null) return false;
-
-        final response = await supabase
+      if (session != null) {
+        final profileFuture = supabase
             .from('profiles')
             .select('vault_salt')
-            .eq('id', user.id)
-            .single();
+            .eq('id', session.user.id)
+            .single()
+            .timeout(const Duration(seconds: 3));
+
+        final userFuture = supabase.auth.getUser().timeout(const Duration(seconds: 3));
+
+        final results = await Future.wait([profileFuture, userFuture]);
+        final response = results[0] as Map<String, dynamic>;
+        final userResponse = results[1] as UserResponse;
 
         saltBase64 = response['vault_salt'] as String?;
+        vaultHashBase64 = userResponse.user?.userMetadata?['vault_hash'] as String?;
 
-        if (saltBase64 != null) {
-          // Cache for next time
+        if (saltBase64 != null && vaultHashBase64 != null) {
+          // Update cache
           await _secureStorage.write(key: 'vault_salt', value: saltBase64);
+          await _secureStorage.write(key: 'vault_hash', value: vaultHashBase64);
+        } else if (saltBase64 == null) {
+           await _secureStorage.delete(key: 'vault_salt');
+           await _secureStorage.delete(key: 'vault_hash');
         }
-      } catch (_) {
-        // No internet & no local cache — can't unlock
-        return false;
       }
+    } catch (_) {
+      // Offline fallback
     }
 
-    if (saltBase64 == null) return false;
+    // 2️⃣ Try local cache if network failed
+    saltBase64 ??= await _secureStorage.read(key: 'vault_salt');
+    vaultHashBase64 ??= await _secureStorage.read(key: 'vault_hash');
+
+    if (saltBase64 == null || vaultHashBase64 == null) return false;
 
     final salt = base64Decode(saltBase64);
 
@@ -136,6 +176,16 @@ class VaultService {
       secretKey: SecretKey(utf8.encode(pin)),
       nonce: salt,
     );
+
+    // 3️⃣ Verify PIN with Hash
+    final secretKeyBytes = await derivedKey.extractBytes();
+    final hashAlgorithm = Sha256();
+    final currentHash = await hashAlgorithm.hash(secretKeyBytes);
+    final currentHashBase64 = base64Encode(currentHash.bytes);
+
+    if (currentHashBase64 != vaultHashBase64) {
+      return false; // Wrong PIN
+    }
 
     _cachedSecretKey = derivedKey;
     return true;
