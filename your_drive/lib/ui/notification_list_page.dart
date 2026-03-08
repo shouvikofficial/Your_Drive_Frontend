@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timeago/timeago.dart' as timeago;
+import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_colors.dart';
 
 
@@ -66,11 +67,80 @@ class NotificationListPage extends StatelessWidget {
                 style: TextStyle(color: Colors.grey[500], fontSize: 13),
               ),
               const Divider(height: 32),
+              if (item['image_url'] != null && item['image_url'].toString().trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 20),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      width: double.infinity,
+                      constraints: const BoxConstraints(maxHeight: 250),
+                      color: Colors.grey[100],
+                      child: Image.network(
+                        item['image_url'].toString().trim(),
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return SizedBox(
+                            height: 150,
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                value: loadingProgress.expectedTotalBytes != null
+                                    ? loadingProgress.cumulativeBytesLoaded / (loadingProgress.expectedTotalBytes ?? 1)
+                                    : null,
+                                strokeWidth: 2,
+                                color: AppColors.blue,
+                              ),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          height: 150,
+                          color: Colors.grey[200],
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.broken_image_rounded, size: 40, color: Colors.grey[400]),
+                              const SizedBox(height: 8),
+                              Text("Image unavailable", style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               Text(
                 item['body'] ?? '',
                 style: const TextStyle(fontSize: 16, height: 1.5, color: Colors.black87),
               ),
               const SizedBox(height: 40),
+              if (item['action_link'] != null && item['action_link'].toString().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.black87,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 0,
+                      ),
+                      onPressed: () async {
+                        final url = Uri.parse(item['action_link']);
+                        if (await canLaunchUrl(url)) {
+                          await launchUrl(url, mode: LaunchMode.externalApplication);
+                        }
+                      },
+                      child: const Text("Open Link", style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -270,9 +340,29 @@ class NotificationListPage extends StatelessWidget {
                         height: 1.3,
                       ),
                     ),
-                    trailing: Text(
-                      timeago.format(created, locale: 'en_short'),
-                      style: TextStyle(fontSize: 11.5, color: Colors.grey[500]),
+                    trailing: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          timeago.format(created, locale: 'en_short'),
+                          style: TextStyle(fontSize: 11.5, color: Colors.grey[500]),
+                        ),
+                        if ((item['image_url'] != null && item['image_url'].toString().trim().isNotEmpty) || (item['action_link'] != null && item['action_link'].toString().trim().isNotEmpty))
+                          const SizedBox(height: 6),
+                        if ((item['image_url'] != null && item['image_url'].toString().trim().isNotEmpty) || (item['action_link'] != null && item['action_link'].toString().trim().isNotEmpty))
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (item['image_url'] != null && item['image_url'].toString().trim().isNotEmpty)
+                                Icon(Icons.image_rounded, size: 14, color: AppColors.blue.withOpacity(0.6)),
+                              if (item['image_url'] != null && item['image_url'].toString().trim().isNotEmpty && item['action_link'] != null && item['action_link'].toString().trim().isNotEmpty)
+                                const SizedBox(width: 6),
+                              if (item['action_link'] != null && item['action_link'].toString().trim().isNotEmpty)
+                                Icon(Icons.link_rounded, size: 14, color: AppColors.purple.withOpacity(0.6)),
+                            ],
+                          ),
+                      ],
                     ),
                     onTap: () async {
                       if (!isRead) {

@@ -165,7 +165,15 @@ Future<void> _createSession() async {
           if (profileData != null) {
             await prefs.setString('user_name', profileData['name'] ?? 'User');
             if (profileData['avatar_url'] != null) {
-              await prefs.setString('user_avatar_url', profileData['avatar_url']);
+              final avatarUrl = profileData['avatar_url'];
+              await prefs.setString('user_avatar_url', avatarUrl);
+              if (mounted) {
+                try {
+                  await precacheImage(NetworkImage(avatarUrl), context);
+                } catch (e) {
+                  debugPrint("Precache error: $e");
+                }
+              }
             }
           }
 
@@ -290,13 +298,29 @@ Future<void> googleLogin() async {
         if (profile != null) {
           await prefs.setString('user_name', profile['name'] ?? 'Google User');
           if (profile['avatar_url'] != null) {
-            await prefs.setString('user_avatar_url', profile['avatar_url']);
+            final avatarUrl = profile['avatar_url'];
+            await prefs.setString('user_avatar_url', avatarUrl);
+            if (mounted) {
+              try {
+                await precacheImage(NetworkImage(avatarUrl), context);
+              } catch (e) {
+                debugPrint("Precache error (Google): $e");
+              }
+            }
           }
         } else {
           // New profile was created
           await prefs.setString('user_name', user.userMetadata?['full_name'] ?? 'Google User');
           if (googleUser.photoUrl != null) {
-            await prefs.setString('user_avatar_url', googleUser.photoUrl!);
+            final avatarUrl = googleUser.photoUrl!;
+            await prefs.setString('user_avatar_url', avatarUrl);
+            if (mounted) {
+              try {
+                await precacheImage(NetworkImage(avatarUrl), context);
+              } catch (e) {
+                debugPrint("Precache error (Google new): $e");
+              }
+            }
           }
         }
 

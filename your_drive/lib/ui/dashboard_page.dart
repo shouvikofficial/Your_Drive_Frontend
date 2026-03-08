@@ -40,11 +40,24 @@ class _DashboardPageState extends State<DashboardPage> {
   // ── Backup status ──
   bool _isBackupEnabled = false;
 
+  Future<void> _precacheProfileImage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final avatarUrl = prefs.getString('user_avatar_url');
+      if (avatarUrl != null && mounted) {
+        precacheImage(NetworkImage(avatarUrl), context);
+      }
+    } catch (e) {
+      debugPrint("Precache on dashboard error: $e");
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _refreshAllData();
     _checkBackupStatus();
+    _precacheProfileImage();
   }
 
   Future<void> _checkBackupStatus() async {
