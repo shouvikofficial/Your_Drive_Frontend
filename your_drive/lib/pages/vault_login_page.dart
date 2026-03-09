@@ -8,6 +8,7 @@ import '../services/backup_service.dart';
 import '../theme/app_colors.dart';
 import '../ui/dashboard_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class VaultLoginPage extends StatefulWidget {
   const VaultLoginPage({super.key});
@@ -319,6 +320,22 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
                       setStateDialog(() => isVerifying = true);
 
                       try {
+                        final connectivity = await Connectivity().checkConnectivity();
+                        final isOffline = connectivity.isNotEmpty &&
+                            connectivity.every((r) => r == ConnectivityResult.none);
+                        if (isOffline) {
+                          if (context.mounted) {
+                            setStateDialog(() => isVerifying = false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text("No internet connection detected."),
+                                backgroundColor: AppColors.blue,
+                              ),
+                            );
+                          }
+                          return;
+                        }
+
                         // Re-authenticate using Supabase signInWithPassword
                         await Supabase.instance.client.auth.signInWithPassword(
                           email: email,
