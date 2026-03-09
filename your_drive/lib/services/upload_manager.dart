@@ -407,6 +407,11 @@ class UploadManager extends ChangeNotifier {
           await dio.Dio().post(cancelUploadUrl, data: {"upload_id": item.uploadId});
         } catch (_) {}
       }
+      
+      // Auto-clear cancelled item after 1 second
+      Future.delayed(const Duration(seconds: 1), () {
+        if (uploadQueue.contains(item)) removeFile(item);
+      });
     } else if (item.status == 'waiting') {
       removeFile(item);
     }
@@ -571,6 +576,11 @@ Future<void> _uploadSingleItemParallel(UploadItem item) async {
         item.progress = 1.0;
         item.status = 'exists';
         _immediateSync();
+        
+        // Auto-clear item after 2 seconds
+        Future.delayed(const Duration(seconds: 2), () {
+          if (uploadQueue.contains(item)) removeFile(item);
+        });
         return;
       }
     }
@@ -773,6 +783,11 @@ if (thumbnailFuture != null) {
       item.progress = 1.0;
       item.status = 'done';
       _immediateSync(); // important state change — notify + persist now
+
+      // Auto-clear item after 2 seconds
+      Future.delayed(const Duration(seconds: 2), () {
+        if (uploadQueue.contains(item)) removeFile(item);
+      });
 
     } on dio.DioException catch (e) {
       item.status = dio.CancelToken.isCancel(e)

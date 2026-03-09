@@ -5,7 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import '../services/saf_service.dart';
 
 import '../theme/app_colors.dart';
-import '../services/upload_manager.dart'; // ✅ Import the manager
+import '../services/upload_manager.dart';
 
 class UploadPage extends StatefulWidget {
   final String? folderId;
@@ -16,13 +16,8 @@ class UploadPage extends StatefulWidget {
 }
 
 class _UploadPageState extends State<UploadPage> {
-  // ✅ Get the Global Singleton Instance
   final manager = UploadManager(); 
-  
-  // Local state for initial folder name setup (UI only)
   String folderName = "My Drive";
-  
-  // ✅ THE TRICK: Local state for heavy processing
   bool _isPreparing = false; 
 
   @override
@@ -31,54 +26,45 @@ class _UploadPageState extends State<UploadPage> {
     if (manager.currentFolderName != "My Drive") {
       folderName = manager.currentFolderName;
     }
-    // Restore any interrupted uploads from previous session
     if (manager.uploadQueue.isEmpty) {
       manager.restoreQueue();
     }
   }
 
-Future<void> pickFiles() async {
-  // 🔹 Open Android SAF multi-file picker
-  final files = await SafService.pickFiles();
+  Future<void> pickFiles() async {
+    final files = await SafService.pickFiles();
+    if (files == null || files.isEmpty) return;
 
-  if (files == null || files.isEmpty) return;
+    setState(() => _isPreparing = true);
+    await Future.delayed(const Duration(milliseconds: 200));
 
-  setState(() => _isPreparing = true);
+    final newItems = <UploadItem>[];
+    for (final file in files) {
+      final item = await manager.addSafFile(
+        uri: file['uri'],
+        name: file['name'],
+        size: file['size'],
+        folderId: widget.folderId,
+        folderName: folderName,
+      );
+      if (item != null) newItems.add(item);
+    }
 
-  await Future.delayed(const Duration(milliseconds: 200));
+    if (mounted) {
+      setState(() => _isPreparing = false);
+    }
 
-  // 🔹 Add ALL selected files to upload manager and track new items
-  final newItems = <UploadItem>[];
-  for (final file in files) {
-    final item = await manager.addSafFile(
-      uri: file['uri'],
-      name: file['name'],
-      size: file['size'],
-      folderId: widget.folderId,
-      folderName: folderName,
-    );
-    if (item != null) newItems.add(item);
-  }
-
-  if (mounted) {
-    setState(() => _isPreparing = false);
-  }
-
-  // 🔹 Auto-start or append to running upload
-  if (newItems.isNotEmpty) {
-    if (manager.isUploading) {
-      manager.uploadAdditionalItems(newItems);
-    } else {
-      manager.startBatchUpload();
+    if (newItems.isNotEmpty) {
+      if (manager.isUploading) {
+        manager.uploadAdditionalItems(newItems);
+      } else {
+        manager.startBatchUpload();
+      }
     }
   }
-}
-
-
 
   @override
   Widget build(BuildContext context) {
-    // Static shell — never rebuilds on upload progress changes
     return PopScope(
       canPop: !_isPreparing,
       child: Scaffold(
@@ -86,17 +72,19 @@ Future<void> pickFiles() async {
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          leading: const BackButton(color: Colors.black),
-          title: const Text("Upload Files", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          leading: const BackButton(color: Colors.black87),
+          title: const Text(
+            "Upload Files", 
+            style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 18)
+          ),
           centerTitle: true,
           actions: [
-            // Only the "+" button listens
             ListenableBuilder(
               listenable: manager,
               builder: (context, _) {
                 if (manager.uploadQueue.isNotEmpty && !_isPreparing) {
                   return IconButton(
-                    icon: const Icon(Icons.add_circle_outline, color: AppColors.blue),
+                    icon: const Icon(Icons.add_circle_outline, color: AppColors.blue, size: 26),
                     onPressed: pickFiles,
                   );
                 }
@@ -107,37 +95,55 @@ Future<void> pickFiles() async {
         ),
         body: Stack(
           children: [
-            // Background decoration — const, never rebuilds
+            // Decorative background
             Positioned(
-              top: -100, right: -50,
-              child: CircleAvatar(radius: 150, backgroundColor: AppColors.blue.withOpacity(0.15)),
+              top: -80, right: -40,
+              child: Container(
+                width: 200, height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.blue.withOpacity(0.08),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 100, left: -60,
+              child: Container(
+                width: 150, height: 150,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.purple.withOpacity(0.05),
+                ),
+              ),
             ),
 
-            // Main Content
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
               child: Column(
                 children: [
-                  // 📂 Folder Info Badge — static text
+                  // Folder Info Badge
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     decoration: BoxDecoration(
-                      color: Colors.grey[100],
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4))
+                      ],
+                      border: Border.all(color: Colors.grey[200]!),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.folder_open, size: 16, color: Colors.grey[600]),
-                        const SizedBox(width: 8),
-                        Text("Uploading to: ", style: TextStyle(color: Colors.grey[600], fontSize: 13)),
-                        Text(manager.currentFolderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                        Icon(Icons.folder_shared, size: 18, color: AppColors.blue.withOpacity(0.8)),
+                        const SizedBox(width: 10),
+                        Text("Uploading to: ", style: TextStyle(color: Colors.grey[600], fontSize: 13, fontWeight: FontWeight.w500)),
+                        Text(manager.currentFolderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87)),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 24),
 
-                  // 📋 Only list + button listen to manager changes
                   ListenableBuilder(
                     listenable: manager,
                     builder: (context, _) {
@@ -156,6 +162,7 @@ Future<void> pickFiles() async {
                                 separatorBuilder: (_, __) => const SizedBox(height: 12),
                                 addAutomaticKeepAlives: false,
                                 addRepaintBoundaries: true,
+                                padding: const EdgeInsets.only(bottom: 20),
                                 itemBuilder: (context, index) {
                                   final item = manager.uploadQueue[index];
                                   return RepaintBoundary(
@@ -165,7 +172,6 @@ Future<void> pickFiles() async {
                                 },
                               ),
                             ),
-                            // 🚀 Action Button
                             _buildActionButton(),
                           ],
                         ),
@@ -176,7 +182,6 @@ Future<void> pickFiles() async {
               ),
             ),
 
-            // ✅ THE PREPARING OVERLAY (Shows on top of everything)
             if (_isPreparing)
               ListenableBuilder(
                 listenable: manager,
@@ -184,30 +189,30 @@ Future<void> pickFiles() async {
                   return Container(
                     width: double.infinity,
                     height: double.infinity,
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withOpacity(0.2),
                     child: Center(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 28),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
-                            BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 20, offset: const Offset(0, 10))
+                            BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 30, offset: const Offset(0, 10))
                           ]
                         ),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const CircularProgressIndicator(color: AppColors.blue, strokeWidth: 3),
-                            const SizedBox(height: 20),
+                            const CircularProgressIndicator(color: AppColors.blue, strokeWidth: 3.5),
+                            const SizedBox(height: 24),
                             const Text(
-                              "Preparing your data...",
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87),
+                              "Preparing Files...",
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.black87),
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              "Processing: ${manager.filesProcessed} of ${manager.totalFilesToProcess}",
-                              style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                              "Processed ${manager.filesProcessed} of ${manager.totalFilesToProcess}",
+                              style: TextStyle(color: Colors.grey[600], fontSize: 14, fontWeight: FontWeight.w500),
                             ),
                           ],
                         ),
@@ -222,36 +227,39 @@ Future<void> pickFiles() async {
     );
   }
 
-  // ================= Extracted Widgets =================
-
   Widget _buildEmptyState() {
     return Expanded(
       child: Center(
         child: GestureDetector(
           onTap: pickFiles,
           child: Container(
-            height: 220,
+            height: 240,
             width: double.infinity,
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: AppColors.blue.withOpacity(0.3), width: 2),
-              boxShadow: [BoxShadow(color: AppColors.blue.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, 10))],
+              color: Colors.white.withOpacity(0.8),
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: AppColors.blue.withOpacity(0.4), width: 2, strokeAlign: BorderSide.strokeAlignInside),
+              boxShadow: [
+                BoxShadow(color: AppColors.blue.withOpacity(0.08), blurRadius: 24, offset: const Offset(0, 12))
+              ],
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                CircleAvatar(
-                  radius: 40,
-                  backgroundColor: AppColors.blue.withOpacity(0.1),
-                  child: const Icon(Icons.cloud_upload_rounded, size: 40, color: AppColors.blue),
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: AppColors.blue.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.cloud_upload_rounded, size: 48, color: AppColors.blue),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
                 const Text("Tap to select files", 
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87)
                 ),
-                const SizedBox(height: 4),
-                Text("Select multiple images, videos, or docs", style: TextStyle(fontSize: 14, color: Colors.grey[500])),
+                const SizedBox(height: 8),
+                Text("Images, videos, or documents", style: TextStyle(fontSize: 15, color: Colors.grey[500])),
               ],
             ),
           ),
@@ -265,14 +273,26 @@ Future<void> pickFiles() async {
       item.status == 'done' || item.status == 'exists' || item.status == 'cancelled'
     );
     final hasPaused = manager.uploadQueue.any((item) =>
-      item.status == 'paused'
+      item.status == 'paused' || item.status == 'interrupted'
     );
+    
+    final int waitingCount = manager.uploadQueue.where((item) => 
+      item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet'
+    ).length;
+
+    final int pausedCount = manager.uploadQueue.where((item) => item.status == 'paused' || item.status == 'interrupted').length;
 
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
-      child: SizedBox(
+      padding: const EdgeInsets.only(top: 8, bottom: 8),
+      child: Container(
         width: double.infinity,
-        height: 56,
+        height: 60,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            if (!allDone) BoxShadow(color: (hasPaused ? Colors.orange : AppColors.blue).withOpacity(0.3), blurRadius: 16, offset: const Offset(0, 8))
+          ],
+        ),
         child: ElevatedButton.icon(
           onPressed: manager.isUploading 
               ? () => Navigator.pop(context) 
@@ -285,24 +305,24 @@ Future<void> pickFiles() async {
                     ? manager.resumeAll
                     : manager.startBatchUpload),
           icon: Icon(
-            allDone ? Icons.check : (hasPaused ? Icons.play_arrow_rounded : Icons.cloud_upload_rounded),
-            size: 22,
+            allDone ? Icons.check_circle_outline : (hasPaused ? Icons.play_circle_filled_rounded : Icons.cloud_upload_rounded),
+            size: 24,
           ),
           label: Text(
             manager.isUploading 
-                ? "Uploading..."
+                ? "Run in Background"
                 : allDone 
                   ? "Done" 
                   : hasPaused
-                    ? "Resume ${manager.uploadQueue.where((item) => item.status == 'paused').length} Paused"
-                    : "Upload ${manager.uploadQueue.where((item) => item.status == 'waiting' || item.status == 'error' || item.status == 'no_internet').length} Files",
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ? "Resume $pausedCount Paused"
+                    : "Upload $waitingCount Files",
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, letterSpacing: 0.5),
           ),
           style: ElevatedButton.styleFrom(
-            backgroundColor: allDone ? Colors.green : (hasPaused ? Colors.orange : AppColors.blue),
+            backgroundColor: allDone ? AppColors.green : (hasPaused ? Colors.orange : AppColors.blue),
             foregroundColor: Colors.white,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           ),
         ),
       ),
@@ -321,7 +341,7 @@ Future<void> pickFiles() async {
     Color statusColor = Colors.grey;
     IconData statusIcon = Icons.circle_outlined;
     String statusText = "Waiting";
-    bool isActive = false; // shows spinner
+    bool isActive = false; 
 
     final pathForIcon = item.file != null ? item.file!.path : (item.name ?? "file");
     final fileName = item.file != null
@@ -334,43 +354,43 @@ Future<void> pickFiles() async {
     switch (item.status) {
       case 'preparing':
         statusColor = Colors.blueGrey;
-        statusIcon = Icons.hourglass_bottom;
+        statusIcon = Icons.hourglass_bottom_rounded;
         statusText = "Preparing";
         isActive = true;
         break;
       case 'encrypting':
-        statusColor = const Color(0xFF00897B); // teal
-        statusIcon = Icons.lock_outline;
+        statusColor = const Color(0xFF00897B); 
+        statusIcon = Icons.lock_outline_rounded;
         statusText = "Encrypting";
         isActive = true;
         break;
       case 'initializing':
         statusColor = Colors.indigo;
-        statusIcon = Icons.settings;
+        statusIcon = Icons.settings_rounded;
         statusText = "Initializing";
         isActive = true;
         break;
       case 'uploading':
         statusColor = AppColors.blue;
-        statusIcon = Icons.upload;
+        statusIcon = Icons.upload_rounded;
         statusText = "Uploading";
         isActive = true;
         break;
       case 'finalizing':
         statusColor = Colors.deepPurple;
-        statusIcon = Icons.cloud_done;
+        statusIcon = Icons.cloud_sync_rounded;
         statusText = "Finalizing";
         isActive = true;
         break;
       case 'done':
-        statusColor = Colors.green;
-        statusIcon = Icons.check_circle;
+        statusColor = AppColors.green;
+        statusIcon = Icons.check_circle_rounded;
         statusText = "Completed";
         break;
       case 'exists':
         statusColor = Colors.orange;
         statusIcon = Icons.cloud_done_outlined;
-        statusText = "Already in cloud";
+        statusText = "Already exists";
         break;
       case 'no_internet':
         statusColor = Colors.orange;
@@ -378,99 +398,94 @@ Future<void> pickFiles() async {
         statusText = "No Internet";
         break;
       case 'error':
-        statusColor = Colors.red;
-        statusIcon = Icons.error_outline;
+        statusColor = Colors.redAccent;
+        statusIcon = Icons.error_outline_rounded;
         statusText = "Failed";
         break;
       case 'cancelled':
         statusColor = Colors.redAccent;
-        statusIcon = Icons.block;
+        statusIcon = Icons.cancel_rounded;
         statusText = "Cancelled";
         break;
       case 'paused':
-        statusColor = Colors.orange;
-        statusIcon = Icons.pause_circle_filled;
-        statusText = "Paused";
-        break;
       case 'interrupted':
         statusColor = Colors.orange;
-        statusIcon = Icons.pause_circle_filled;
+        statusIcon = Icons.pause_circle_filled_rounded;
         statusText = "Paused";
         break;
     }
 
     final bool isUploading = item.status == 'uploading';
     final int pct = (item.progress * 100).round();
+    final bool showProgressBar = isUploading || (['paused', 'interrupted'].contains(item.status) && item.progress > 0);
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.grey[100]!),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4))
+          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 4))
         ],
       ),
       child: Row(
         children: [
-          // File type icon
+          // File Icon
           Container(
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: AppColors.blue.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
+              color: statusColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(16),
             ),
-            child: Icon(_getIconForFile(pathForIcon), color: AppColors.blue, size: 24),
+            child: Icon(_getIconForFile(pathForIcon), color: statusColor, size: 28),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 16),
 
-          // Body
+          // Details
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Filename
                 Text(
                   fileName,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 6),
 
-                // Status row
                 Row(
                   children: [
-                    // Spinner or icon
                     if (isActive)
                       SizedBox(
-                        width: 11, height: 11,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.8,
-                          color: statusColor,
-                        ),
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: statusColor),
                       )
                     else
-                      Icon(statusIcon, size: 13, color: statusColor),
-                    const SizedBox(width: 5),
+                      Icon(statusIcon, size: 16, color: statusColor),
+                    const SizedBox(width: 6),
 
-                    // Status text + %
                     Text(
                       isUploading 
                           ? 'Uploading · $pct%' 
-                          : (item.status == 'paused' && pct > 0)
+                          : (['paused', 'interrupted'].contains(item.status) && pct > 0)
                             ? 'Paused · $pct%'
                             : statusText,
-                      style: TextStyle(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600),
+                      style: TextStyle(fontSize: 13, color: statusColor, fontWeight: FontWeight.w600),
                     ),
 
-                    // File size — flexible so it never overflows
                     if (sizeLabel.isNotEmpty) ...[
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 8),
+                      Container(
+                        width: 4, height: 4,
+                        decoration: BoxDecoration(color: Colors.grey[400], shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 8),
                       Flexible(
                         child: Text(
-                          '· $sizeLabel',
-                          style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                          sizeLabel,
+                          style: TextStyle(fontSize: 12, color: Colors.grey[500], fontWeight: FontWeight.w500),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -478,16 +493,23 @@ Future<void> pickFiles() async {
                   ],
                 ),
 
-                // Progress bar (uploading or paused with partial progress)
-                if (isUploading || (item.status == 'paused' && item.progress > 0)) ...[
-                  const SizedBox(height: 5),
+                // SMOOTH Progress Bar
+                if (showProgressBar) ...[
+                  const SizedBox(height: 10),
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: item.progress,
-                      minHeight: 4,
-                      backgroundColor: Colors.grey[200],
-                      color: item.status == 'paused' ? Colors.orange : AppColors.blue,
+                    borderRadius: BorderRadius.circular(6),
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: 0.0, end: item.progress),
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOutCubic,
+                      builder: (context, value, _) {
+                        return LinearProgressIndicator(
+                          value: value,
+                          minHeight: 6,
+                          backgroundColor: Colors.grey[200],
+                          color: (['paused', 'interrupted'].contains(item.status)) ? Colors.orange : AppColors.blue,
+                        );
+                      },
                     ),
                   ),
                 ],
@@ -496,23 +518,25 @@ Future<void> pickFiles() async {
           ),
           const SizedBox(width: 12),
 
-          // Right action
+          // Actions
           if (isUploading)
-            IconButton(
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              icon: const Icon(Icons.cancel, size: 22, color: Colors.redAccent),
-              onPressed: () => manager.cancelUpload(item),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.red[50],
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: Icon(Icons.close_rounded, size: 20, color: Colors.red[400]),
+                onPressed: () => manager.cancelUpload(item),
+              ),
             )
           else if ((item.status == 'waiting' || item.status == 'paused' || item.status == 'interrupted') && !manager.isUploading)
             IconButton(
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              icon: const Icon(Icons.close, size: 20, color: Colors.grey),
+              icon: const Icon(Icons.close_rounded, size: 24, color: Colors.black38),
               onPressed: () => manager.removeFile(item),
             )
-          else
-            Icon(statusIcon, color: statusColor, size: 22),
+          else if (item.status == 'done')
+            Icon(Icons.check_circle_rounded, color: AppColors.green.withOpacity(0.5), size: 32)
         ],
       ),
     );
@@ -520,12 +544,13 @@ Future<void> pickFiles() async {
 
   IconData _getIconForFile(String path) {
     final ext = path.split('.').last.toLowerCase();
-    if (['jpg', 'png', 'jpeg', 'webp', 'heic'].contains(ext)) return Icons.image;
-    if (['mp4', 'mov', 'avi', 'mkv'].contains(ext)) return Icons.videocam;
-    if (['pdf'].contains(ext)) return Icons.picture_as_pdf; 
-    if (['mp3', 'wav', 'aac'].contains(ext)) return Icons.music_note;
-    if (['doc', 'docx'].contains(ext)) return Icons.description;
-    if (['xls', 'xlsx'].contains(ext)) return Icons.table_chart;
-    return Icons.insert_drive_file;
+    if (['jpg', 'png', 'jpeg', 'webp', 'heic'].contains(ext)) return Icons.image_rounded;
+    if (['mp4', 'mov', 'avi', 'mkv'].contains(ext)) return Icons.videocam_rounded;
+    if (['pdf'].contains(ext)) return Icons.picture_as_pdf_rounded; 
+    if (['mp3', 'wav', 'aac', 'm4a'].contains(ext)) return Icons.music_note_rounded;
+    if (['doc', 'docx'].contains(ext)) return Icons.description_rounded;
+    if (['xls', 'xlsx'].contains(ext)) return Icons.table_chart_rounded;
+    if (['zip', 'rar', '7z'].contains(ext)) return Icons.folder_zip_rounded;
+    return Icons.insert_drive_file_rounded;
   }
 }
