@@ -14,6 +14,7 @@ import '../services/download_service.dart';
 import '../services/vault_service.dart';
 import '../services/thumbnail_cache_service.dart';
 import 'file_viewer_page.dart';
+import 'widgets/shimmer_rect.dart';
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -1211,7 +1212,12 @@ class _SearchResultCardState extends State<_SearchResultCard> {
                 future: _thumbnailFuture,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                    return Container(
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFF5F5F5),
+                      ),
+                      child: const Center(child: ShimmerRect(width: 48, height: 48, radius: 12)),
+                    );
                   }
                   if (snapshot.hasData && snapshot.data != null) {
                     return ClipRRect(
@@ -1331,7 +1337,7 @@ class _SearchResultListItemState extends State<_SearchResultListItem> {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return Container(
                     color: Colors.grey[100],
-                    child: const Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))),
+                    child: const Center(child: ShimmerRect(width: 24, height: 24, radius: 6)),
                   );
                 }
                 if (snapshot.hasData && snapshot.data != null) {

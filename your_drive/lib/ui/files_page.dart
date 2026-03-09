@@ -1310,7 +1310,7 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
                     return Container(
                       width: 90, height: 90,
                       decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(16)),
-                      child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                      child: const Center(child: _ShimmerRect(width: 40, height: 40, radius: 10)),
                     );
                   }
                   if (snapshot.hasData && snapshot.data != null) {
@@ -1406,8 +1406,14 @@ class _FileCardState extends State<_FileCard> {
                     future: _thumbnailFuture,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                        return Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: const Center(
+                            child: _ShimmerRect(width: 48, height: 48, radius: 12),
+                          ),
                         );
                       }
 
@@ -1537,11 +1543,7 @@ class _FileListItemState extends State<_FileListItem> {
                       return Container(
                         color: Colors.grey[100],
                         child: const Center(
-                          child: SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
+                          child: _ShimmerRect(width: 24, height: 24, radius: 6),
                         ),
                       );
                     }
