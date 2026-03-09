@@ -1,5 +1,8 @@
 import 'dart:collection';
 import 'dart:typed_data';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
 /// Global LRU thumbnail cache — survives page navigation.
 ///
@@ -14,6 +17,15 @@ class ThumbnailCacheService {
   // LinkedHashMap preserves insertion order → easy LRU eviction from front.
   final LinkedHashMap<dynamic, Future<Uint8List?>> _cache =
       LinkedHashMap<dynamic, Future<Uint8List?>>();
+
+  Future<File> _getThumbFile(dynamic key) async {
+    final dir = await getTemporaryDirectory();
+    final thumbDir = Directory('${dir.path}/thumbnails');
+    if (!await thumbDir.exists()) {
+      await thumbDir.create(recursive: true);
+    }
+    return File('${thumbDir.path}/thumb_$key');
+  }
 
   /// Returns the cached (or in-flight) future for [key].
   /// If absent, calls [loader] to produce the future, stores it, and returns it.
@@ -30,14 +42,52 @@ class ThumbnailCacheService {
       _cache.remove(_cache.keys.first);
     }
 
-    final future = loader();
+    final future = _loadWithDiskCache(key, loader);
     _cache[key] = future;
     return future;
   }
 
+  Future<Uint8List?> _loadWithDiskCache(dynamic key, Future<Uint8List?> Function() loader) async {
+    try {
+      final file = await _getThumbFile(key);
+      if (await file.exists()) {
+        return await file.readAsBytes();
+      }
+      
+      final bytes = await loader();
+      if (bytes != null) {
+        file.writeAsBytes(bytes).catchError((e) {
+          debugPrint("Failed to save thumbnail to disk: $e");
+          return file; // dummy return for catchError typing
+        });
+      }
+      return bytes;
+    } catch (e) {
+      debugPrint("Thumbnail caching error: $e");
+      return await loader();
+    }
+  }
+
   /// Remove a single entry (e.g. after a file is deleted).
-  void evict(dynamic key) => _cache.remove(key);
+  void evict(dynamic key) async {
+    _cache.remove(key);
+    try {
+      final file = await _getThumbFile(key);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
 
   /// Clear everything (e.g. on logout).
-  void clear() => _cache.clear();
+  void clear() async {
+    _cache.clear();
+    try {
+      final dir = await getTemporaryDirectory();
+      final thumbDir = Directory('${dir.path}/thumbnails');
+      if (await thumbDir.exists()) {
+        await thumbDir.delete(recursive: true);
+      }
+    } catch (_) {}
+  }
 }
