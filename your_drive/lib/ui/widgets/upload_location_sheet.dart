@@ -1,8 +1,37 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../upload_page.dart'; // ✅ Imports UploadPage correctly
+import '../../services/upload_manager.dart';
+import '../../services/saf_service.dart';
 
 void showUploadLocationPicker(BuildContext context) {
+  Future<void> _pickAndUploadFiles(BuildContext ctx, String? folderId, String folderName) async {
+    Navigator.pop(ctx); // Close the BottomSheet first
+
+    final files = await SafService.pickFiles();
+    if (files == null || files.isEmpty) return;
+
+    final manager = UploadManager();
+    final newItems = <UploadItem>[];
+
+    for (final file in files) {
+      final item = await manager.addSafFile(
+        uri: file['uri'],
+        name: file['name'],
+        size: file['size'],
+        folderId: folderId,
+        folderName: folderName,
+      );
+      if (item != null) newItems.add(item);
+    }
+
+    if (newItems.isNotEmpty) {
+      if (manager.isUploading) {
+        manager.uploadAdditionalItems(newItems);
+      } else {
+        manager.startBatchUpload();
+      }
+    }
+  }
   showModalBottomSheet(
     context: context,
     isScrollControlled: true, // ✅ Allows the sheet to expand fully
@@ -55,13 +84,7 @@ void showUploadLocationPicker(BuildContext context) {
                   title: const Text("My Drive (Root)"),
                   subtitle: const Text("Upload outside of any folder"),
                   onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const UploadPage(folderId: null),
-                      ),
-                    );
+                    _pickAndUploadFiles(context, null, 'My Drive');
                   },
                 ),
 
@@ -125,15 +148,7 @@ void showUploadLocationPicker(BuildContext context) {
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                           onTap: () {
-                            Navigator.pop(context);
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => UploadPage(
-                                  folderId: folder['id'],
-                                ),
-                              ),
-                            );
+                            _pickAndUploadFiles(context, folder['id'], folder['name']);
                           },
                         );
                       },

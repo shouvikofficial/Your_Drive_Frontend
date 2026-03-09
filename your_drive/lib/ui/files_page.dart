@@ -16,6 +16,8 @@ import '../services/download_service.dart';
 import '../services/vault_service.dart';
 import '../services/thumbnail_cache_service.dart';
 import '../services/offline_file_service.dart';
+import '../services/upload_manager.dart'; // ✅ Added
+import '../services/saf_service.dart';    // ✅ Added
 import 'upload_page.dart';
 import 'file_viewer_page.dart';
 
@@ -865,8 +867,30 @@ Future<String?> _fetchThumbnailIv(dynamic messageId) async {
       floatingActionButton: (isSelectionMode || _isLoading) ? null : FloatingActionButton.extended(
         backgroundColor: AppColors.blue,
         onPressed: () async {
-          final res = await Navigator.push(context, MaterialPageRoute(builder: (_) => UploadPage(folderId: widget.folderId)));
-          if (res == true) _fetchFilesInitial();
+          final files = await SafService.pickFiles();
+          if (files == null || files.isEmpty) return;
+
+          final uploadManager = UploadManager();
+          final newItems = <UploadItem>[];
+
+          for (final file in files) {
+            final item = await uploadManager.addSafFile(
+              uri: file['uri'],
+              name: file['name'],
+              size: file['size'],
+              folderId: widget.folderId,
+              folderName: widget.type == 'all' ? 'My Drive' : widget.type.toUpperCase(),
+            );
+            if (item != null) newItems.add(item);
+          }
+
+          if (newItems.isNotEmpty) {
+            if (uploadManager.isUploading) {
+              uploadManager.uploadAdditionalItems(newItems);
+            } else {
+              uploadManager.startBatchUpload();
+            }
+          }
         },
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text("Upload", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
