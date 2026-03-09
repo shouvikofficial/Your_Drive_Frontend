@@ -198,15 +198,25 @@ class NotificationListPage extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const SizedBox(width: 8),
-                const Text(
-                  "Notifications",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 22,
-                    letterSpacing: -0.5,
-                  ),
+                Row(
+                  children: [
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 22),
+                      onPressed: () => Navigator.pop(context),
+                      tooltip: "Back",
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      "Notifications",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 22,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ],
                 ),
                 IconButton(
                   tooltip: "Mark all as read",
