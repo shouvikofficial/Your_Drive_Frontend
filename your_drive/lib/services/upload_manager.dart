@@ -412,7 +412,7 @@ class UploadManager extends ChangeNotifier {
       Future.delayed(const Duration(seconds: 1), () {
         if (uploadQueue.contains(item)) removeFile(item);
       });
-    } else if (item.status == 'waiting') {
+    } else if (item.status == 'waiting' || item.status == 'paused' || item.status == 'error' || item.status == 'no_internet' || item.status == 'interrupted') {
       removeFile(item);
     }
   }

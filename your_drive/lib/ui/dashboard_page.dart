@@ -393,9 +393,11 @@ class _DashboardPageState extends State<DashboardPage> {
       listenable: manager,
       builder: (context, _) {
         final isUploading = manager.isUploadingNotifier.value;
-        final hasPaused = manager.uploadQueue.any((i) => i.status == 'paused');
-        final pausedCount =
-            manager.uploadQueue.where((i) => i.status == 'paused').length;
+        final hasPaused = manager.uploadQueue.any((i) => i.status == 'paused' || i.status == 'waiting');
+        final hasFailed = manager.uploadQueue.any((i) => i.status == 'error' || i.status == 'no_internet');
+        
+        final pausedOrWaitingCount = manager.uploadQueue.where((i) => i.status == 'paused' || i.status == 'waiting').length;
+        final failedCount = manager.uploadQueue.where((i) => i.status == 'error' || i.status == 'no_internet').length;
 
         return Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -498,6 +500,32 @@ class _DashboardPageState extends State<DashboardPage> {
                   ),
                 ),
               )
+            else if (hasFailed)
+              GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const UploadPage()),
+                ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: Colors.red.withOpacity(0.15), width: 1),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.error_outline_rounded, size: 15, color: Colors.red),
+                      const SizedBox(width: 6),
+                      Text(
+                        "$failedCount Failed",
+                        style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w700, fontSize: 12.5),
+                      ),
+                    ],
+                  ),
+                ),
+              )
             else if (hasPaused)
               GestureDetector(
                 onTap: () => Navigator.push(
@@ -505,32 +533,20 @@ class _DashboardPageState extends State<DashboardPage> {
                   MaterialPageRoute(builder: (_) => const UploadPage()),
                 ),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
                     color: Colors.orange.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                      color: Colors.orange.withOpacity(0.15),
-                      width: 1,
-                    ),
+                    border: Border.all(color: Colors.orange.withOpacity(0.15), width: 1),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(
-                        Icons.pause_circle_filled,
-                        size: 15,
-                        color: Colors.orange,
-                      ),
+                      const Icon(Icons.pause_circle_filled, size: 15, color: Colors.orange),
                       const SizedBox(width: 6),
                       Text(
-                        "$pausedCount Paused",
-                        style: const TextStyle(
-                          color: Colors.orange,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12.5,
-                        ),
+                        "$pausedOrWaitingCount Paused",
+                        style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w700, fontSize: 12.5),
                       ),
                     ],
                   ),
