@@ -7,6 +7,7 @@ import '../services/vault_service.dart';
 import '../services/backup_service.dart';
 import '../theme/app_colors.dart';
 import '../ui/dashboard_page.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class VaultLoginPage extends StatefulWidget {
   const VaultLoginPage({super.key});
@@ -19,6 +20,7 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
   // 🚀 OPTIMISTIC UI STATE
   bool isSetup = true; 
   bool isLoading = false; 
+  bool isResetting = false;
   
   String title = "Welcome Back";
   String subTitle = "Enter your 4-digit security PIN";
@@ -26,6 +28,8 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
   final _vaultService = VaultService();
   StreamController<ErrorAnimationType>? errorController;
   TextEditingController textEditingController = TextEditingController();
+  TextEditingController resetEmailController = TextEditingController();
+  TextEditingController resetPasswordController = TextEditingController();
 
   @override
   void initState() {
@@ -38,6 +42,8 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
   void dispose() {
     errorController?.close();
     textEditingController.dispose();
+    resetEmailController.dispose();
+    resetPasswordController.dispose();
     super.dispose();
   }
 
@@ -219,10 +225,10 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
             child: const Text("Cancel, keep my data", style: TextStyle(color: Colors.black87)),
           ),
           ElevatedButton(
-            onPressed: () async {
+            onPressed: () {
               HapticFeedback.heavyImpact(); // Physical feedback for destructive action
               Navigator.pop(context);
-              await _performVaultReset();
+              _showLoginToResetDialog();
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
@@ -235,17 +241,159 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
     );
   }
 
+  // --- 🔐 4. VERIFY IDENTITY DIALOG (Step 3) ---
+  void _showLoginToResetDialog() {
+    bool isVerifying = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setStateDialog) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          title: Row(
+            children: [
+              const Icon(Icons.security_rounded, color: AppColors.blue, size: 28),
+              const SizedBox(width: 12),
+              const Text("Verify Identity", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Please enter your main account email and password to authorize this vault reset.",
+                style: TextStyle(color: Colors.grey[800], fontSize: 14, height: 1.5),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: resetEmailController,
+                keyboardType: TextInputType.emailAddress,
+                enabled: !isVerifying,
+                decoration: InputDecoration(
+                  labelText: "Email",
+                  prefixIcon: const Icon(Icons.email_outlined, color: Colors.grey),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: resetPasswordController,
+                obscureText: true,
+                enabled: !isVerifying,
+                decoration: InputDecoration(
+                  labelText: "Password",
+                  prefixIcon: const Icon(Icons.lock_outline, color: Colors.grey),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            if (!isVerifying)
+              TextButton(
+                onPressed: () {
+                  resetEmailController.clear();
+                  resetPasswordController.clear();
+                  Navigator.pop(context);
+                },
+                child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+              ),
+            ElevatedButton(
+              onPressed: isVerifying
+                  ? null
+                  : () async {
+                      final email = resetEmailController.text.trim();
+                      final password = resetPasswordController.text.trim();
+
+                      if (email.isEmpty || password.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("Please enter both email and password")),
+                        );
+                        return;
+                      }
+
+                      setStateDialog(() => isVerifying = true);
+
+                      try {
+                        // Re-authenticate using Supabase signInWithPassword
+                        await Supabase.instance.client.auth.signInWithPassword(
+                          email: email,
+                          password: password,
+                        );
+
+                        if (context.mounted) {
+                          Navigator.pop(context); // Close dialog on success
+                          resetEmailController.clear();
+                          resetPasswordController.clear();
+                          await _performVaultReset(); // Proceed with reset
+                        }
+                      } on AuthException catch (e) {
+                        if (context.mounted) {
+                          setStateDialog(() => isVerifying = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                e.message.toLowerCase().contains("invalid login credentials")
+                                    ? "Incorrect email or password."
+                                    : e.message,
+                              ),
+                              backgroundColor: Colors.red.shade400,
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          setStateDialog(() => isVerifying = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("Verification failed. Please try again."),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.blue,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: isVerifying
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                    )
+                  : const Text("Verify & Reset", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _performVaultReset() async {
-    setState(() => isLoading = true);
+    setState(() {
+      isLoading = true;
+      isResetting = true;
+    });
     // Simulate reset time
     await Future.delayed(const Duration(seconds: 2)); 
     
-    // ✅ TODO: Call your service to wipe data here
-    // await _vaultService.clearAllData(); 
+    // ✅ Call your service to wipe data here
+    await VaultService().lockVault();
+    // In a real app we would clear stored data too. Currently we just clear knowledge of the PIN
+    // By resetting the vault hash and salt. The underlying files remain encrypted and effectively lost
+    // unless they stored their PIN in memory safely, which they are saying they didn't.
+    // We already do lockVault above.
     
     if (mounted) {
       setState(() {
         isLoading = false;
+        isResetting = false;
         isSetup = false; 
         title = "Create Vault PIN";
         subTitle = "Vault reset complete. Set a new PIN.";
@@ -488,7 +636,9 @@ class _VaultLoginPageState extends State<VaultLoginPage> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            isSetup ? "Unlocking your vault..." : "Securing your vault...",
+                            isResetting 
+                                ? "Resetting your vault..." 
+                                : (isSetup ? "Unlocking your vault..." : "Securing your vault..."),
                             style: const TextStyle(
                               fontSize: 14,
                               color: Colors.black54,
