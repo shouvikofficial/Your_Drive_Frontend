@@ -570,14 +570,6 @@ class HelpPage extends StatelessWidget {
           ),
 
           const SizedBox(height: 12),
-
-          /// 📦 APP VERSION
-          const Center(
-            child: Text(
-              "Version 1.0.0",
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
-          ),
         ],
       ),
     );

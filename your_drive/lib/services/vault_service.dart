@@ -114,6 +114,10 @@ class VaultService {
 
     // Cache key in memory
     _cachedSecretKey = secretKey;
+
+    // ✅ Cache key in secure storage for background backup isolates
+    final secretKeyBytesForStorage = await secretKey.extractBytes();
+    await _secureStorage.write(key: 'vault_secret_key', value: base64Encode(secretKeyBytesForStorage));
   }
 
   // ============================================================
@@ -188,6 +192,11 @@ class VaultService {
     }
 
     _cachedSecretKey = derivedKey;
+    
+    // ✅ Cache key in secure storage for background backup isolates
+    final secretKeyBytesForStorage = await derivedKey.extractBytes();
+    await _secureStorage.write(key: 'vault_secret_key', value: base64Encode(secretKeyBytesForStorage));
+
     return true;
   }
 
@@ -196,6 +205,13 @@ class VaultService {
   // ============================================================
   Future<SecretKey> getSecretKey() async {
     if (_cachedSecretKey == null) {
+      // Try to load from secure storage (for background isolates)
+      final storedKeyBase64 = await _secureStorage.read(key: 'vault_secret_key');
+      if (storedKeyBase64 != null) {
+        final keyBytes = base64Decode(storedKeyBase64);
+        _cachedSecretKey = SecretKey(keyBytes);
+        return _cachedSecretKey!;
+      }
       throw Exception("Vault locked. Please enter PIN.");
     }
     return _cachedSecretKey!;
@@ -211,7 +227,8 @@ class VaultService {
   // ============================================================
   // 🔒 LOCK VAULT (ON LOGOUT)
   // ============================================================
-  void lockVault() {
+  Future<void> lockVault() async {
     _cachedSecretKey = null;
+    await _secureStorage.delete(key: 'vault_secret_key');
   }
 }
