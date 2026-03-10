@@ -398,28 +398,7 @@ class _AddOptionsSheet extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
 
-                // Row 3: Scan Document
-                Row(
-                  children: [
-                    Expanded(
-                      child: _DashboardOptionCard(
-                        icon: Icons.document_scanner_rounded,
-                        title: 'Scan',
-                        subtitle: 'Scan document',
-                        color: Colors.teal,
-                        onTap: () => _captureAndUpload(
-                          context,
-                          ImageSource.camera,
-                          CameraDevice.rear,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    const Expanded(child: SizedBox()),
-                  ],
-                ),
               ],
             ),
           ),
