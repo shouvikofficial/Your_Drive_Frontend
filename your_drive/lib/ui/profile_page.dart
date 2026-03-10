@@ -433,22 +433,6 @@ class _ProfilePageState extends State<ProfilePage> {
 
                         const SizedBox(height: 28),
 
-                        _buildSectionHeader("ACCOUNT & SECURITY", Icons.shield_outlined),
-                        _buildSettingsGroup([
-                          _buildSettingsItem(
-                            Icons.person_outline_rounded,
-                            "Account Settings",
-                            onTap: () => _navTo(const AccountSettingsPage(), refreshProfile: true),
-                          ),
-                          _settingsDivider(),
-                          _buildSettingsItem(
-                            Icons.lock_outline_rounded,
-                            "Privacy & Security",
-                            onTap: () => _navTo(const PrivacyPage()),
-                          ),
-                        ]),
-                        const SizedBox(height: 24),
-
                         _buildSectionHeader("DATA & SYNC", Icons.cloud_done_outlined),
                         _buildSettingsGroup([
                           _buildSettingsItem(
@@ -478,6 +462,24 @@ class _ProfilePageState extends State<ProfilePage> {
                           ),
                         ]),
                         const SizedBox(height: 24),
+
+                        _buildSectionHeader("ACCOUNT & SECURITY", Icons.shield_outlined),
+                        _buildSettingsGroup([
+                          _buildSettingsItem(
+                            Icons.person_outline_rounded,
+                            "Account Settings",
+                            onTap: () => _navTo(const AccountSettingsPage(), refreshProfile: true),
+                          ),
+                          _settingsDivider(),
+                          _buildSettingsItem(
+                            Icons.lock_outline_rounded,
+                            "Privacy & Security",
+                            onTap: () => _navTo(const PrivacyPage()),
+                          ),
+                        ]),
+                        const SizedBox(height: 24),
+
+                        
 
                         _buildSectionHeader("APP & SUPPORT", Icons.grid_view_rounded),
                         _buildSettingsGroup([
