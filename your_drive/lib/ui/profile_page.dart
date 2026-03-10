@@ -431,120 +431,68 @@ class _ProfilePageState extends State<ProfilePage> {
 
                         const SizedBox(height: 28),
 
-                        // ── QUICK ACTIONS ──
-                        Row(
-                          children: [
-                            _buildQuickAction(
-                              Icons.person_outline_rounded,
-                              "Account",
-                              AppColors.blue,
-                              () => _navTo(const AccountSettingsPage(), refreshProfile: true),
-                            ),
-                            const SizedBox(width: 12),
-                            _buildQuickAction(
-                              Icons.lock_outline_rounded,
-                              "Security",
-                              AppColors.green,
-                              () => _navTo(const PrivacyPage()),
-                            ),
-                          ],
-                        ),
-
                         const SizedBox(height: 28),
 
-                        // ── SETTINGS SECTION ──
-                        Padding(
-                          padding: const EdgeInsets.only(left: 4, bottom: 12),
-                          child: Row(
-                            children: [
-                              Icon(Icons.settings, size: 16, color: Colors.grey[500]),
-                              const SizedBox(width: 6),
-                              const Text(
-                                "SETTINGS",
+                        _buildSectionHeader("ACCOUNT & SECURITY", Icons.shield_outlined),
+                        _buildSettingsGroup([
+                          _buildSettingsItem(
+                            Icons.person_outline_rounded,
+                            "Account Settings",
+                            onTap: () => _navTo(const AccountSettingsPage(), refreshProfile: true),
+                          ),
+                          _settingsDivider(),
+                          _buildSettingsItem(
+                            Icons.lock_outline_rounded,
+                            "Privacy & Security",
+                            onTap: () => _navTo(const PrivacyPage()),
+                          ),
+                        ]),
+                        const SizedBox(height: 24),
+
+                        _buildSectionHeader("DATA & SYNC", Icons.cloud_done_outlined),
+                        _buildSettingsGroup([
+                          _buildSettingsItem(
+                            Icons.cloud_sync_outlined,
+                            "Backup & Sync",
+                            trailingWidget: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: _isBackupOn
+                                    ? AppColors.blue.withOpacity(0.1)
+                                    : Colors.grey.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                _isBackupOn ? "On" : "Off",
                                 style: TextStyle(
+                                  color: _isBackupOn ? AppColors.blue : Colors.grey,
+                                  fontWeight: FontWeight.w600,
                                   fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.grey,
-                                  letterSpacing: 1.0,
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
-
-                        // Settings card
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(24),
-                          child: BackdropFilter(
-                            filter:
-                                ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.75),
-                                borderRadius: BorderRadius.circular(24),
-                                border: Border.all(
-                                    color: Colors.white.withOpacity(0.35)),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.04),
-                                    blurRadius: 20,
-                                    offset: const Offset(0, 10),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                children: [
-                                  _buildSettingsItem(
-                                    Icons.cloud_sync_outlined,
-                                    "Backup & Sync",
-                                    trailingWidget: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: _isBackupOn
-                                            ? AppColors.blue
-                                                .withOpacity(0.1)
-                                            : Colors.grey.withOpacity(0.1),
-                                        borderRadius:
-                                            BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        _isBackupOn ? "On" : "Off",
-                                        style: TextStyle(
-                                          color: _isBackupOn
-                                              ? AppColors.blue
-                                              : Colors.grey,
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ),
-                                    onTap: () async {
-                                      await _navTo(
-                                          const BackupSettingsPage());
-                                      _checkBackupStatus();
-                                    },
-                                  ),
-                                  _settingsDivider(),
-                                  _buildSettingsItem(
-                                    Icons.notifications_none_rounded,
-                                    "Notifications",
-                                    onTap: () => _navTo(
-                                        const NotificationsPage()),
-                                  ),
-                                  _settingsDivider(),
-                                  _buildSettingsItem(
-                                    Icons.help_outline_rounded,
-                                    "Help & Support",
-                                    onTap: () =>
-                                        _navTo(const HelpPage()),
-                                  ),
-                                ],
-                              ),
                             ),
+                            onTap: () async {
+                              await _navTo(const BackupSettingsPage());
+                              _checkBackupStatus();
+                            },
                           ),
-                        ),
+                        ]),
+                        const SizedBox(height: 24),
 
+                        _buildSectionHeader("APP & SUPPORT", Icons.grid_view_rounded),
+                        _buildSettingsGroup([
+                          _buildSettingsItem(
+                            Icons.notifications_none_rounded,
+                            "Notifications",
+                            onTap: () => _navTo(const NotificationsPage()),
+                          ),
+                          _settingsDivider(),
+                          _buildSettingsItem(
+                            Icons.help_outline_rounded,
+                            "Help & Support",
+                            onTap: () => _navTo(const HelpPage()),
+                          ),
+                        ]),
                         const SizedBox(height: 32),
 
                         // ── LOGOUT BUTTON ──
@@ -600,53 +548,47 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // ── Quick action button ──
-  Widget _buildQuickAction(
-      IconData icon, String label, Color color, VoidCallback onTap) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 18),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.75),
-                borderRadius: BorderRadius.circular(20),
-                border:
-                    Border.all(color: Colors.white.withOpacity(0.35)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: color.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(icon, color: color, size: 22),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
-              ),
+  Widget _buildSectionHeader(String title, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 12),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: Colors.grey[500]),
+          const SizedBox(width: 6),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
+              letterSpacing: 1.0,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSettingsGroup(List<Widget> children) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.75),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withOpacity(0.35)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            children: children,
           ),
         ),
       ),
