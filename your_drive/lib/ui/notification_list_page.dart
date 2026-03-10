@@ -14,11 +14,13 @@ class NotificationListPage extends StatelessWidget {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.transparent,
-        ),
+      builder: (context) => SafeArea(
+        bottom: false,
         child: Container(
+          decoration: const BoxDecoration(
+            color: Colors.transparent,
+          ),
+          child: Container(
           padding: const EdgeInsets.all(24),
           decoration: const BoxDecoration(
             color: Colors.white,
@@ -46,8 +48,14 @@ class NotificationListPage extends StatelessWidget {
                   ),
                 ),
               ),
-              Row(
-                children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
                   CircleAvatar(
                     backgroundColor: AppColors.blue.withOpacity(0.12),
                     child: const Icon(Icons.notifications_rounded, color: AppColors.blue),
@@ -132,9 +140,15 @@ class NotificationListPage extends StatelessWidget {
                         elevation: 0,
                       ),
                       onPressed: () async {
-                        final url = Uri.parse(item['action_link']);
-                        if (await canLaunchUrl(url)) {
+                        String link = item['action_link'].toString().trim();
+                        if (!link.startsWith('http://') && !link.startsWith('https://')) {
+                          link = 'https://$link';
+                        }
+                        final url = Uri.parse(link);
+                        try {
                           await launchUrl(url, mode: LaunchMode.externalApplication);
+                        } catch (e) {
+                          debugPrint('Error launching URL: \$e');
                         }
                       },
                       child: const Text("Open Link", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -158,12 +172,17 @@ class NotificationListPage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   @override
   Widget build(BuildContext context) {
