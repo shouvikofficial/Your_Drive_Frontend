@@ -17,6 +17,7 @@ import 'ui/onboarding_page.dart';
 import 'pages/vault_login_page.dart';
 import 'ui/widgets/offline_banner.dart';
 import 'ui/widgets/update_dialog.dart';
+import 'package:flutter/services.dart';
 
 // 🔔 BACKGROUND NOTIFICATION HANDLER
 @pragma('vm:entry-point')
@@ -29,6 +30,13 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent, // ✅ Make status bar transparent
+      statusBarIconBrightness: Brightness.dark, // ✅ Dark icons for light background
+    ),
+  );
 
   // ================= HIVE INIT (🔥 IMPORTANT FIX)
   final dir = await getApplicationDocumentsDirectory();
