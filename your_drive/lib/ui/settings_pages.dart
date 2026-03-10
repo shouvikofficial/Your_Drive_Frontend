@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_colors.dart';
 import '../services/biometric_service.dart'; 
@@ -73,6 +74,10 @@ class _BackupSettingsPageState extends State<BackupSettingsPage> {
         elevation: 0,
         leading: const BackButton(color: Colors.black),
         titleTextStyle: const TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.dark,
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -431,6 +436,10 @@ class _PrivacyPageState extends State<PrivacyPage> {
         elevation: 0,
         leading: const BackButton(color: Colors.black),
         titleTextStyle: const TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.dark,
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -511,6 +520,10 @@ class HelpPage extends StatelessWidget {
         elevation: 0,
         leading: const BackButton(color: Colors.black),
         titleTextStyle: const TextStyle(color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.dark,
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -658,6 +671,10 @@ class FAQsPage extends StatelessWidget {
         leading: const BackButton(color: Colors.black),
         titleTextStyle: const TextStyle(
             color: Colors.black, fontSize: 20, fontWeight: FontWeight.bold),
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.dark,
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
